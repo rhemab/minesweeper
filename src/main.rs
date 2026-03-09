@@ -1,14 +1,15 @@
 use iced::time::{self, seconds};
 use iced::widget::{button, center, column, row, text};
-use iced::{Center, Color, Element, Length, Subscription};
+use iced::{Center, Color, Element, Length, Subscription, Theme};
 use rand::prelude::*;
 use std::collections::VecDeque;
 
-const DEFAULT_GRID_SIZE: usize = 10;
+const DEFAULT_GRID_SIZE: usize = 15;
 
 pub fn main() -> iced::Result {
     iced::application(Minesweeper::default, Minesweeper::update, Minesweeper::view)
         .subscription(Minesweeper::subscription)
+        .theme(Minesweeper::theme)
         .run()
 }
 
@@ -24,14 +25,12 @@ impl Default for Minesweeper {
     fn default() -> Self {
         let mut game = Self {
             grid_size: DEFAULT_GRID_SIZE,
-            grid: generate_grid(DEFAULT_GRID_SIZE, DEFAULT_GRID_SIZE),
+            grid: generate_grid(DEFAULT_GRID_SIZE, (DEFAULT_GRID_SIZE as f32 * 2.) as usize),
             game_over: false,
             running: false,
             seconds: 0,
         };
-
         game.compute_cell_numbers();
-
         game
     }
 }
@@ -51,6 +50,10 @@ enum Message {
 }
 
 impl Minesweeper {
+    fn theme(&self) -> Theme {
+        Theme::CatppuccinFrappe
+    }
+
     fn update(&mut self, message: Message) {
         match message {
             Message::Reveal(row, col) => {
@@ -64,9 +67,7 @@ impl Minesweeper {
                 self.flood_fill(row, col);
             }
             Message::NewGame => {
-                let mut game = Self::default();
-                game.compute_cell_numbers();
-                *self = game;
+                *self = Self::default();
             }
             Message::Tick => {
                 self.seconds += 1;
@@ -86,7 +87,7 @@ impl Minesweeper {
                     if !cell.is_mine && cell.number > 0 {
                         number = cell.number.to_string();
                     } else if cell.is_mine {
-                        number = "*".to_string();
+                        number = "💥".to_string();
                     }
                 };
                 button(text(number).center())
@@ -112,7 +113,7 @@ impl Minesweeper {
         if self.game_over {
             title_content = "Game Over!";
         }
-        let timer = text(format!("{}:{:02}", self.seconds / 60, self.seconds % 60)).size(24);
+        let timer = text(format!("{}:{:02}", self.seconds / 60, self.seconds % 60));
         let title = text(title_content);
         let controls = button("New Game").on_press(Message::NewGame);
 
