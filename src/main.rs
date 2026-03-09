@@ -1,12 +1,21 @@
 #![windows_subsystem = "windows"]
 
 use iced::time::{self, seconds};
-use iced::widget::{button, center, column, row, text};
+use iced::widget::{button, center, column, mouse_area, row, text};
 use iced::{Center, Color, Element, Length, Subscription, Theme};
 use rand::prelude::*;
 use std::collections::VecDeque;
 
 const DEFAULT_GRID_SIZE: usize = 15;
+const DEFAULT_MINE_COUNT: usize = DEFAULT_GRID_SIZE * 2;
+const BLUE: Color = Color::from_rgb(0.0, 0.0, 1.0);
+const GREEN: Color = Color::from_rgb(0.0, 0.5, 0.0);
+const RED: Color = Color::from_rgb(1.0, 0.0, 0.0);
+const DARK_BLUE: Color = Color::from_rgb(0.0, 0.0, 0.5);
+const DARK_RED: Color = Color::from_rgb(0.5, 0.0, 0.0);
+const TEAL: Color = Color::from_rgb(0.0, 0.5, 0.5);
+const BLACK: Color = Color::BLACK;
+const GRAY: Color = Color::from_rgb(0.5, 0.5, 0.5);
 
 pub fn main() -> iced::Result {
     iced::application(Minesweeper::default, Minesweeper::update, Minesweeper::view)
@@ -18,21 +27,28 @@ pub fn main() -> iced::Result {
 struct Minesweeper {
     grid_size: usize,
     grid: Vec<Vec<Cell>>,
+    squares_cleared: usize,
+    mine_count: usize,
+    flags: usize,
     game_over: bool,
+    game_won: bool,
     running: bool,
     seconds: u32,
 }
 
 impl Default for Minesweeper {
     fn default() -> Self {
-        let mut game = Self {
+        let game = Self {
             grid_size: DEFAULT_GRID_SIZE,
-            grid: generate_grid(DEFAULT_GRID_SIZE, (DEFAULT_GRID_SIZE as f32 * 2.) as usize),
+            grid: vec![vec![Cell::default(); DEFAULT_GRID_SIZE]; DEFAULT_GRID_SIZE],
+            squares_cleared: 0,
+            mine_count: DEFAULT_MINE_COUNT,
+            flags: 0,
             game_over: false,
+            game_won: false,
             running: false,
             seconds: 0,
         };
-        game.compute_cell_numbers();
         game
     }
 }
@@ -41,12 +57,14 @@ impl Default for Minesweeper {
 struct Cell {
     is_revealed: bool,
     is_mine: bool,
+    is_flaged: bool,
     number: u8,
 }
 
 #[derive(Debug, Clone, Copy)]
 enum Message {
     Reveal(usize, usize),
+    Flag(usize, usize),
     NewGame,
     Tick,
 }
@@ -59,14 +77,30 @@ impl Minesweeper {
     fn update(&mut self, message: Message) {
         match message {
             Message::Reveal(row, col) => {
-                if !self.running {
+                if !self.running && !self.game_over && !self.game_won {
+                    // only generate bombs after first click
+                    self.generate_bombs(row, col);
+                    self.compute_cell_numbers();
                     self.running = true;
                 }
-                if self.game_over {
-                    self.running = false;
+                self.flood_fill(row, col);
+                self.check_game_won();
+            }
+            Message::Flag(row, col) => {
+                if self.game_over || self.game_won {
                     return;
                 }
-                self.flood_fill(row, col);
+                // don't allow more flags than mines
+                if self.flags == self.mine_count {
+                    return;
+                }
+                if !self.grid[row][col].is_flaged && !self.grid[row][col].is_revealed {
+                    self.grid[row][col].is_flaged = true;
+                    self.flags += 1;
+                } else if self.grid[row][col].is_flaged {
+                    self.grid[row][col].is_flaged = false;
+                    self.flags -= 1;
+                }
             }
             Message::NewGame => {
                 *self = Self::default();
@@ -83,44 +117,65 @@ impl Minesweeper {
             row((0..grid_size).map(|x| {
                 let cell = &self.grid[x][y];
                 let mut number = "".to_string();
-                let mut color = Color::from_rgb(0.5, 0.5, 0.5);
+                let mut cell_color = Color::from_rgb(0.5, 0.5, 0.5);
+                let text_color = match cell.number {
+                    1 => BLUE,
+                    2 => GREEN,
+                    3 => RED,
+                    4 => DARK_BLUE,
+                    5 => DARK_RED,
+                    6 => TEAL,
+                    7 => BLACK,
+                    8 => GRAY,
+                    _ => Color::TRANSPARENT,
+                };
                 if cell.is_revealed {
-                    color = Color::from_rgb(0.8, 0.8, 0.8);
+                    cell_color = Color::from_rgb(0.8, 0.8, 0.8);
                     if !cell.is_mine && cell.number > 0 {
                         number = cell.number.to_string();
                     } else if cell.is_mine {
                         number = "💥".to_string();
                     }
-                };
-                button(text(number).center())
-                    .style(move |_theme, _status| button::Style {
-                        background: Some(iced::Background::Color(color)),
-                        border: iced::Border {
-                            radius: 2.0.into(),
-                            width: 1.0,
-                            color: Color::BLACK,
-                        },
-                        ..button::Style::default()
-                    })
-                    .width(32)
-                    .height(32)
-                    .on_press(Message::Reveal(x, y))
-                    .into()
+                } else if cell.is_flaged {
+                    number = "🚩".to_string();
+                }
+                mouse_area(
+                    button(text(number).color(text_color).center())
+                        .style(move |_theme, _status| button::Style {
+                            background: Some(iced::Background::Color(cell_color)),
+                            border: iced::Border {
+                                radius: 2.0.into(),
+                                width: 1.0,
+                                color: Color::BLACK,
+                            },
+                            ..button::Style::default()
+                        })
+                        .width(32)
+                        .height(32),
+                )
+                .on_press(Message::Reveal(x, y))
+                .on_right_press(Message::Flag(x, y))
+                .into()
             }))
             .into()
-        }))
-        .spacing(1);
+        }));
 
         let mut title_content = "Minesweeper";
         if self.game_over {
             title_content = "Game Over!";
+        } else if self.game_won {
+            title_content = "Game Won!";
         }
         let timer = text(format!("{}:{:02}", self.seconds / 60, self.seconds % 60));
         let title = text(title_content);
-        let controls = button("New Game").on_press(Message::NewGame);
+        let stats = row![text(format!(
+            "Bombs Remaining: {}",
+            self.mine_count - self.flags
+        ))];
+        let controls = row![button("New Game").on_press(Message::NewGame)];
 
         center(
-            column![title, timer, grid, controls]
+            column![title, timer, grid, stats, controls]
                 .spacing(20)
                 .width(Length::Fill)
                 .align_x(Center),
@@ -129,19 +184,45 @@ impl Minesweeper {
     }
 
     fn subscription(&self) -> Subscription<Message> {
-        if self.running && !self.game_over {
+        if self.running && !self.game_over && !self.game_won {
             time::every(seconds(1)).map(|_| Message::Tick)
         } else {
             Subscription::none()
         }
     }
 
-    fn flood_fill(&mut self, row: usize, col: usize) {
-        if self.game_over {
-            return;
+    fn check_game_won(&mut self) {
+        let num_clear_squares = (DEFAULT_GRID_SIZE * DEFAULT_GRID_SIZE) - DEFAULT_MINE_COUNT;
+        dbg!(num_clear_squares);
+        dbg!(self.squares_cleared);
+        if self.squares_cleared == num_clear_squares {
+            self.game_won = true;
         }
+    }
 
-        if self.grid[row][col].is_revealed {
+    fn generate_bombs(&mut self, selected_row: usize, selected_col: usize) {
+        let mut rng = rand::rng();
+        let mut mines_placed = 0;
+        while mines_placed < self.mine_count {
+            let row = rng.random_range(0..self.grid_size);
+            let col = rng.random_range(0..self.grid_size);
+            if !self.grid[row][col].is_mine {
+                if row == selected_row && col == selected_col {
+                    continue;
+                }
+                self.grid[row][col].is_mine = true;
+                mines_placed += 1;
+            }
+            dbg!(mines_placed);
+        }
+    }
+
+    fn flood_fill(&mut self, row: usize, col: usize) {
+        if self.game_over
+            || self.game_won
+            || self.grid[row][col].is_revealed
+            || self.grid[row][col].is_flaged
+        {
             return;
         }
 
@@ -160,7 +241,9 @@ impl Minesweeper {
                 continue;
             }
 
+            // reveal square
             self.grid[row][col].is_revealed = true;
+            self.squares_cleared += 1;
 
             // if cell is a 0, push all neighbors to queue
             if self.grid[row][col].number == 0 {
@@ -215,21 +298,4 @@ impl Minesweeper {
 
         result
     }
-}
-
-fn generate_grid(grid_size: usize, mine_count: usize) -> Vec<Vec<Cell>> {
-    let mut rng = rand::rng();
-    let mut grid = vec![vec![Cell::default(); grid_size]; grid_size];
-
-    let mut mines_placed = 0;
-    while mines_placed < mine_count {
-        let x = rng.random_range(0..grid_size);
-        let y = rng.random_range(0..grid_size);
-        if !grid[y][x].is_mine {
-            grid[y][x].is_mine = true;
-            mines_placed += 1;
-        }
-    }
-
-    grid
 }
