@@ -1,31 +1,38 @@
+use iced::time::{self, seconds};
 use iced::widget::{button, center, column, row, text};
-use iced::{Center, Color, Element, Length};
+use iced::{Center, Color, Element, Length, Subscription};
 use rand::prelude::*;
 use std::collections::VecDeque;
 
 const DEFAULT_GRID_SIZE: usize = 10;
 
 pub fn main() -> iced::Result {
-    iced::run(Minesweeper::update, Minesweeper::view)
+    iced::application(Minesweeper::default, Minesweeper::update, Minesweeper::view)
+        .subscription(Minesweeper::subscription)
+        .run()
 }
 
 struct Minesweeper {
     grid_size: usize,
     grid: Vec<Vec<Cell>>,
     game_over: bool,
+    running: bool,
+    seconds: u32,
 }
 
 impl Default for Minesweeper {
     fn default() -> Self {
-        let mut grid = Self {
+        let mut game = Self {
             grid_size: DEFAULT_GRID_SIZE,
             grid: generate_grid(DEFAULT_GRID_SIZE, DEFAULT_GRID_SIZE),
             game_over: false,
+            running: false,
+            seconds: 0,
         };
 
-        grid.compute_cell_numbers();
+        game.compute_cell_numbers();
 
-        grid
+        game
     }
 }
 
@@ -39,13 +46,30 @@ struct Cell {
 #[derive(Debug, Clone, Copy)]
 enum Message {
     Reveal(usize, usize),
+    NewGame,
+    Tick,
 }
 
 impl Minesweeper {
     fn update(&mut self, message: Message) {
         match message {
             Message::Reveal(row, col) => {
+                if !self.running {
+                    self.running = true;
+                }
+                if self.game_over {
+                    self.running = false;
+                    return;
+                }
                 self.flood_fill(row, col);
+            }
+            Message::NewGame => {
+                let mut game = Self::default();
+                game.compute_cell_numbers();
+                *self = game;
+            }
+            Message::Tick => {
+                self.seconds += 1;
             }
         }
     }
@@ -80,19 +104,40 @@ impl Minesweeper {
                     .on_press(Message::Reveal(x, y))
                     .into()
             }))
-            // .spacing(1)
             .into()
         }))
-        .width(Length::Fill)
-        .align_x(Center)
         .spacing(1);
 
-        let title = text("Minesweeper!").width(Length::Fill).align_x(Center);
+        let mut title_content = "Minesweeper";
+        if self.game_over {
+            title_content = "Game Over!";
+        }
+        let timer = text(format!("{}:{:02}", self.seconds / 60, self.seconds % 60)).size(24);
+        let title = text(title_content);
+        let controls = button("New Game").on_press(Message::NewGame);
 
-        center(column![title, grid].spacing(20)).into()
+        center(
+            column![title, timer, grid, controls]
+                .spacing(20)
+                .width(Length::Fill)
+                .align_x(Center),
+        )
+        .into()
+    }
+
+    fn subscription(&self) -> Subscription<Message> {
+        if self.running && !self.game_over {
+            time::every(seconds(1)).map(|_| Message::Tick)
+        } else {
+            Subscription::none()
+        }
     }
 
     fn flood_fill(&mut self, row: usize, col: usize) {
+        if self.game_over {
+            return;
+        }
+
         if self.grid[row][col].is_revealed {
             return;
         }
