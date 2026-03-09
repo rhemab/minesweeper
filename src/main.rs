@@ -1,3 +1,5 @@
+#![windows_subsystem = "windows"]
+
 use iced::time::{self, seconds};
 use iced::widget::{button, center, column, row, text};
 use iced::{Center, Color, Element, Length, Subscription, Theme};
