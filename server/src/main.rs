@@ -1,7 +1,7 @@
 use axum::{
     Router,
-    body::Bytes,
-    extract::ws::{Message, Utf8Bytes, WebSocket, WebSocketUpgrade},
+    extract::State,
+    extract::ws::{Message, WebSocket, WebSocketUpgrade},
     response::IntoResponse,
     routing::any,
 };
@@ -12,15 +12,34 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 //allows to extract the IP of connecting user
 use axum::extract::connect_info::ConnectInfo;
-use axum::extract::ws::CloseFrame;
 
 //allows to split the websocket stream into separate TX and RX branches
 use futures_util::{sink::SinkExt, stream::StreamExt};
+use shared;
 use std::collections::HashMap;
+use std::sync::Arc;
+use tokio::sync::{Mutex, broadcast};
+use tracing::error;
 use uuid::Uuid;
 
-struct App {
-    games: HashMap<Uuid, Game>,
+#[derive(Default)]
+struct AppState {
+    games: HashMap<String, Game>,
+    game_waiting: String,
+}
+
+struct Game {
+    minesweeper: shared::MinesweeperGame,
+    player_one: Player,
+    player_two: Player,
+    turn: usize,
+    tx: broadcast::Sender<shared::WsMsg>,
+}
+
+#[derive(Default)]
+struct Player {
+    id: String,
+    name: String,
 }
 
 #[tokio::main]
@@ -33,8 +52,12 @@ async fn main() {
         .with(tracing_subscriber::fmt::layer())
         .init();
 
+    let app_state = AppState::default();
+
     // build our application with some routes
-    let app = Router::new().route("/ws", any(ws_handler));
+    let app = Router::new()
+        .route("/ws", any(ws_handler))
+        .with_state(Arc::new(Mutex::new(app_state)));
 
     // run it with hyper
     let listener = tokio::net::TcpListener::bind("0.0.0.0:8080").await.unwrap();
@@ -46,101 +69,106 @@ async fn main() {
     .await;
 }
 
-/// The handler for the HTTP request (this gets called when the HTTP request lands at the start
-/// of websocket negotiation). After this completes, the actual switching from HTTP to
-/// websocket protocol will occur.
-/// This is the last point where we can extract TCP/IP metadata such as IP address of the client
-/// as well as things from HTTP headers such as user-agent of the browser etc.
 async fn ws_handler(
+    State(app_state): State<Arc<Mutex<AppState>>>,
     ws: WebSocketUpgrade,
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
 ) -> impl IntoResponse {
     println!("{addr} connected.");
-    // finalize the upgrade process by returning upgrade callback.
-    // we can customize the callback by sending additional info such as address.
-    ws.on_upgrade(move |socket| handle_socket(socket, addr))
+    ws.on_upgrade(move |socket| handle_socket(socket, addr, app_state))
 }
 
-/// Actual websocket statemachine (one will be spawned per connection)
-async fn handle_socket(mut socket: WebSocket, who: SocketAddr) {
-    // send a ping (unsupported by some browsers) just to kick things off and get a response
-    if socket
-        .send(Message::Ping(Bytes::from_static(&[1, 2, 3])))
-        .await
-        .is_ok()
-    {
-        println!("Pinged {who}...");
-    } else {
-        println!("Could not send ping {who}!");
-        // no Error here since the only thing we can do is to close the connection.
-        // If we can not send messages, there is no way to salvage the statemachine anyway.
-        return;
-    }
-
-    // receive single message from a client (we can either receive or send with socket).
-    // this will likely be the Pong for our Ping or a hello message from client.
-    // waiting for message from a client will block this task, but will not block other client's
-    // connections.
-    if let Some(msg) = socket.recv().await {
-        if let Ok(msg) = msg {
-            if process_message(msg, who).is_break() {
-                return;
-            }
-        } else {
-            println!("client {who} abruptly disconnected");
-            return;
-        }
-    }
-
-    for i in 1..5 {
-        if socket
-            .send(Message::Text(format!("Hi {i} times!").into()))
-            .await
-            .is_err()
-        {
-            println!("client {who} abruptly disconnected");
-            return;
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-    }
-
+async fn handle_socket(socket: WebSocket, who: SocketAddr, app_state: Arc<Mutex<AppState>>) {
+    let (tx, mut rx) = broadcast::channel::<shared::WsMsg>(32);
     let (mut sender, mut receiver) = socket.split();
+    let mut game_id = String::new();
+    let user_id = Uuid::new_v4().to_string();
+    let mut role = 1;
 
-    let mut send_task = tokio::spawn(async move {
-        let n_msg = 20;
-        for i in 0..n_msg {
-            // In case of any websocket error, we exit.
-            if sender
-                .send(Message::Text(format!("Server message {i} ...").into()))
-                .await
-                .is_err()
-            {
-                return i;
+    {
+        let mut app_state = app_state.lock().await;
+        if !app_state.game_waiting.is_empty() {
+            // join game
+            let waiting_game_id = app_state.game_waiting.clone();
+            if let Some(game) = app_state.games.get_mut(&waiting_game_id) {
+                rx = game.tx.subscribe();
+                game_id = waiting_game_id.clone();
+                game.player_two.id = user_id.clone();
+                app_state.game_waiting.clear();
+                role = 2;
             }
-
-            tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+        }
+        if game_id.is_empty() {
+            // create a new game
+            let new_game = Game {
+                minesweeper: shared::MinesweeperGame::default(),
+                player_one: Player {
+                    id: user_id.clone(),
+                    name: String::new(),
+                },
+                player_two: Player::default(),
+                turn: 1,
+                tx,
+            };
+            rx = new_game.tx.subscribe();
+            let new_game_id = Uuid::new_v4().to_string();
+            game_id = new_game_id.clone();
+            app_state.game_waiting = game_id.clone();
+            app_state.games.insert(new_game_id, new_game);
         }
 
-        println!("Sending close to {who}...");
-        if let Err(e) = sender
-            .send(Message::Close(Some(CloseFrame {
-                code: axum::extract::ws::close_code::NORMAL,
-                reason: Utf8Bytes::from_static("Goodbye"),
-            })))
-            .await
-        {
-            println!("Could not send Close due to {e}, probably it is ok?");
+        // send new connection msg
+        let msg = shared::WsMsg::NewConnection {
+            game_id: game_id.clone(),
+            user_id: user_id.clone(),
+        };
+        if let Ok(json_msg) = serde_json::to_string(&msg) {
+            if let Err(err) = sender.send(Message::Text(json_msg.into())).await {
+                error!("ws error sending initial msg: {}", err);
+            }
+            dbg!("new connection sent: {}", msg);
         }
-        n_msg
+
+        // send initial game state
+        if let Some(game) = app_state.games.get(&game_id) {
+            let msg = shared::WsMsg::GameState {
+                game: game.minesweeper.clone(),
+                player_one_name: String::new(),
+                player_two_name: String::new(),
+                role: role,
+                turn: game.turn,
+            };
+            if let Ok(json_msg) = serde_json::to_string(&msg) {
+                if let Err(err) = sender.send(Message::Text(json_msg.into())).await {
+                    error!("ws error sending initial msg: {}", err);
+                }
+            }
+        }
+    }
+
+    // receive messages on the channel and
+    // send messages on the socket
+    let mut send_task = tokio::spawn(async move {
+        while let Ok(msg) = rx.recv().await {
+            if let Ok(json_msg) = serde_json::to_string(&msg) {
+                // In case of any websocket error, we exit.
+                if sender.send(Message::Text(json_msg.into())).await.is_err() {
+                    return 1;
+                }
+            }
+        }
+
+        0
     });
 
-    // This second task will receive messages from client and print them on server console
+    // receive messages on the socket
     let mut recv_task = tokio::spawn(async move {
         let mut cnt = 0;
         while let Some(Ok(msg)) = receiver.next().await {
             cnt += 1;
-            // print message and break if instructed to do so
-            if process_message(msg, who).is_break() {
+            if process_message(msg, app_state.clone()).await.is_break() {
+                let mut app_state = app_state.lock().await;
+                app_state.games.remove_entry(&game_id);
                 break;
             }
         }
@@ -169,36 +197,101 @@ async fn handle_socket(mut socket: WebSocket, who: SocketAddr) {
     println!("Websocket context {who} destroyed");
 }
 
-/// helper to print contents of messages to stdout. Has special treatment for Close.
-fn process_message(msg: Message, who: SocketAddr) -> ControlFlow<(), ()> {
+async fn process_message(msg: Message, app_state: Arc<Mutex<AppState>>) -> ControlFlow<(), ()> {
     match msg {
         Message::Text(t) => {
-            println!(">>> {who} sent str: {t:?}");
-        }
-        Message::Binary(d) => {
-            println!(">>> {who} sent {} bytes: {d:?}", d.len());
-        }
-        Message::Close(c) => {
-            if let Some(cf) = c {
-                println!(
-                    ">>> {who} sent close with code {} and reason `{}`",
-                    cf.code, cf.reason
-                );
-            } else {
-                println!(">>> {who} somehow sent close message without CloseFrame");
+            if let Ok(ws_msg) = serde_json::from_str::<shared::WsMsg>(&t) {
+                dbg!("msg received: {}", ws_msg.clone());
+                match ws_msg {
+                    shared::WsMsg::NewMove {
+                        row,
+                        col,
+                        game_id,
+                        user_id,
+                    } => {
+                        let mut app_state = app_state.lock().await;
+                        if let Some(game) = app_state.games.get_mut(&game_id) {
+                            if !game.minesweeper.game_won && !game.minesweeper.game_over {
+                                // make move
+                                if game.turn == 1 && game.player_one.id == user_id {
+                                    // only generate bombs after first click
+                                    if !game.minesweeper.running {
+                                        game.minesweeper.generate_bombs(row, col);
+                                        game.minesweeper.compute_cell_numbers();
+                                        game.minesweeper.running = true;
+                                    }
+                                    game.minesweeper.flood_fill(row, col);
+                                    if game.minesweeper.game_over {
+                                        let game_over = shared::WsMsg::GameOver { winner: 2 };
+                                        if let Err(err) = game.tx.send(game_over) {
+                                            error!("Error sending over channel: {}", err);
+                                        }
+                                        return ControlFlow::Break(());
+                                    }
+                                    game.minesweeper.check_game_won();
+                                    if game.minesweeper.game_won {
+                                        let game_over =
+                                            shared::WsMsg::GameOver { winner: game.turn };
+                                        if let Err(err) = game.tx.send(game_over) {
+                                            error!("Error sending over channel: {}", err);
+                                        }
+                                        return ControlFlow::Break(());
+                                    }
+                                    game.turn += 1;
+                                    // send game state back to clients
+                                    let new_game_state = shared::WsMsg::GameState {
+                                        game: game.minesweeper.clone(),
+                                        player_one_name: game.player_one.name.clone(),
+                                        player_two_name: game.player_two.name.clone(),
+                                        role: 1,
+                                        turn: game.turn,
+                                    };
+                                    if let Err(err) = game.tx.send(new_game_state) {
+                                        error!("Error sending over channel: {}", err);
+                                    }
+                                } else if game.turn == 2 && game.player_two.id == user_id {
+                                    game.minesweeper.flood_fill(row, col);
+                                    if game.minesweeper.game_over {
+                                        let game_over = shared::WsMsg::GameOver { winner: 1 };
+                                        if let Err(err) = game.tx.send(game_over) {
+                                            error!("Error sending over channel: {}", err);
+                                        }
+                                        return ControlFlow::Break(());
+                                    }
+                                    game.minesweeper.check_game_won();
+                                    if game.minesweeper.game_won {
+                                        let game_over = shared::WsMsg::GameOver { winner: 2 };
+                                        if let Err(err) = game.tx.send(game_over) {
+                                            error!("Error sending over channel: {}", err);
+                                        }
+                                        return ControlFlow::Break(());
+                                    }
+                                    game.turn -= 1;
+                                    // send game state back to clients
+                                    let new_game_state = shared::WsMsg::GameState {
+                                        game: game.minesweeper.clone(),
+                                        player_one_name: game.player_one.name.clone(),
+                                        player_two_name: game.player_two.name.clone(),
+                                        role: 2,
+                                        turn: game.turn,
+                                    };
+                                    if let Err(err) = game.tx.send(new_game_state) {
+                                        error!("Error sending over channel: {}", err);
+                                    }
+                                }
+                            }
+                            return ControlFlow::Continue(());
+                        }
+                    }
+                    _ => {}
+                }
             }
+        }
+        Message::Close(_) => {
             return ControlFlow::Break(());
         }
 
-        Message::Pong(v) => {
-            println!(">>> {who} sent pong with {v:?}");
-        }
-        // You should never need to manually handle Message::Ping, as axum's websocket library
-        // will do so for you automagically by replying with Pong and copying the v according to
-        // spec. But if you need the contents of the pings you can see them here.
-        Message::Ping(v) => {
-            println!(">>> {who} sent ping with {v:?}");
-        }
+        _ => {}
     }
     ControlFlow::Continue(())
 }

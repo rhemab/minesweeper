@@ -4,5 +4,8 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-iced = { version = "0.14.0", features = ["tokio"] }
-rand = "0.10.0"
+async-tungstenite = { version = "0.33.0", features = ["tokio-rustls-webpki-roots"] }
+iced = { version = "0.14.0", features = ["tokio", "sipper"] }
+serde_json = "1.0.149"
+shared = { path = "../shared" }
+tokio = { version = "1.50.0", features = ["time"] }
