@@ -322,6 +322,21 @@ impl AppState {
                     .into()
                 }));
 
+                let online_status;
+                let online_status_color;
+                match state.connection {
+                    WebsocketState::Disconnected => {
+                        online_status = "Multiplayer Disconnected";
+                        online_status_color = RED;
+                    }
+                    WebsocketState::Connected(_) => {
+                        online_status = "Multiplayer Connected";
+                        online_status_color = GREEN;
+                    }
+                };
+                let online_status = row![text(online_status).size(12).color(online_status_color)];
+                let grid = grid.push(online_status);
+
                 let mut title_content = "Minesweeper";
                 if state.game.game_over {
                     title_content = "Game Over!";
