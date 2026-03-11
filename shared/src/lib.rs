@@ -14,20 +14,21 @@ pub enum WsMsg {
         game_id: String,
         user_id: String,
     },
+    Close,
+
+    // receive from server
     GameOver {
         winner: usize,
     },
-
-    // receive from server
     NewConnection {
         game_id: String,
         user_id: String,
+        role: usize,
     },
     GameState {
         game: MinesweeperGame,
         player_one_name: String,
         player_two_name: String,
-        role: usize,
         turn: usize,
     },
 }

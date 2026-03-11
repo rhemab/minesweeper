@@ -39,6 +39,7 @@ struct MultiplayerState {
     role: usize,
     game_id: String,
     user_id: String,
+    winner: usize,
 }
 
 enum WebsocketState {
@@ -84,6 +85,7 @@ impl AppState {
                         role: 0,
                         game_id: String::new(),
                         user_id: String::new(),
+                        winner: 0,
                     })
                 }
                 _ => {}
@@ -126,6 +128,7 @@ impl AppState {
                 }
             }
             AppState::Multiplayer(state) => match message {
+                Message::NewGame => {}
                 Message::WebsocketEvent(event) => match event {
                     websocket::Event::Connected(connection) => {
                         state.connection = WebsocketState::Connected(connection);
@@ -134,47 +137,49 @@ impl AppState {
                         state.connection = WebsocketState::Disconnected;
                     }
                     websocket::Event::MessageReceived(message) => match message {
-                        shared::WsMsg::NewConnection { game_id, user_id } => {
-                            dbg!(game_id.clone(), user_id.clone());
+                        shared::WsMsg::NewConnection {
+                            game_id,
+                            user_id,
+                            role,
+                        } => {
                             state.game_id = game_id;
                             state.user_id = user_id;
+                            state.role = role;
                         }
                         shared::WsMsg::GameState {
                             game,
-                            player_one_name,
-                            player_two_name,
-                            role,
+                            player_one_name: _,
+                            player_two_name: _,
                             turn,
                         } => {
-                            dbg!("game state received");
                             state.game = game;
                             state.turn = turn;
-                            state.role = role;
+                        }
+                        shared::WsMsg::GameOver { winner } => {
+                            dbg!(winner);
+                            state.winner = winner;
+                            match &mut state.connection {
+                                WebsocketState::Connected(conn) => {
+                                    conn.send(shared::WsMsg::Close);
+                                }
+                                _ => {}
+                            }
                         }
                         _ => {}
                     },
                 },
                 Message::Reveal(row, col) => {
-                    dbg!("reveal: {}, {}", row, col);
                     // send move to server
                     match &mut state.connection {
                         WebsocketState::Connected(conn) => {
-                            let game_id = state.game_id.clone();
-                            let user_id = state.user_id.clone();
-                            if !game_id.is_empty() || !user_id.is_empty() {
-                                conn.send(shared::WsMsg::NewMove {
-                                    row,
-                                    col,
-                                    game_id: state.game_id.clone(),
-                                    user_id: state.user_id.clone(),
-                                });
-                            } else {
-                                dbg!(game_id, user_id);
-                            }
+                            conn.send(shared::WsMsg::NewMove {
+                                row,
+                                col,
+                                game_id: state.game_id.clone(),
+                                user_id: state.user_id.clone(),
+                            });
                         }
-                        _ => {
-                            dbg!("no connection");
-                        }
+                        _ => {}
                     }
                 }
                 _ => {}
@@ -330,6 +335,10 @@ impl AppState {
                 if state.game.game_over {
                     title_content = "Game Over!";
                 } else if state.game.game_won {
+                    title_content = "Game Won!";
+                }
+                dbg!(state.winner, state.role);
+                if state.winner == state.role {
                     title_content = "Game Won!";
                 }
                 let timer = text(format!(
