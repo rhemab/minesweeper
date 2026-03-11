@@ -170,7 +170,10 @@ impl AppState {
             AppState::Multiplayer(state) => match message {
                 Message::NewGame => {
                     *self = AppState::Loading;
-                    return Task::perform(async {}, |_| Message::Multiplayer);
+                    return Task::perform(
+                        tokio::time::sleep(tokio::time::Duration::from_millis(500)),
+                        |_| Message::Multiplayer,
+                    );
                 }
                 Message::WebsocketEvent(event) => match event {
                     websocket::Event::Connected(connection) => {
