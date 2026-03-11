@@ -1,7 +1,7 @@
 #![windows_subsystem = "windows"]
 
 use iced::time::{self, seconds};
-use iced::widget::{button, center, column, mouse_area, row, text};
+use iced::widget::{Space, button, center, column, mouse_area, row, text};
 use iced::{Center, Color, Element, Length, Subscription, Theme};
 
 use shared;
@@ -334,28 +334,32 @@ impl AppState {
                         online_status_color = GREEN;
                     }
                 };
-                let online_status = row![text(online_status).size(12).color(online_status_color)];
-                let grid = grid.push(online_status);
+                let bombs_remaining = text(format!(
+                    "Bombs Remaining: {}",
+                    state.game.mine_count - state.game.flags
+                ))
+                .size(12);
+                let online_status = row![
+                    text(online_status).size(12).color(online_status_color),
+                    bombs_remaining
+                ]
+                .spacing(100);
 
-                let mut title_content = "Minesweeper";
+                let mut title = "Minesweeper";
                 if state.game.game_over {
-                    title_content = "Game Over!";
+                    title = "Game Over!";
                 } else if state.game.game_won {
-                    title_content = "Game Won!";
+                    title = "Game Won!";
                 }
                 if state.winner == state.role {
-                    title_content = "Game Won!";
+                    title = "Game Won!";
                 }
+                let title = text(title);
                 let timer = text(format!(
                     "{}:{:02}",
                     state.game.seconds / 60,
                     state.game.seconds % 60
                 ));
-                let title = text(title_content);
-                let stats = row![text(format!(
-                    "Bombs Remaining: {}",
-                    state.game.mine_count - state.game.flags
-                ))];
                 let controls = row![
                     button(text("New Game").size(12).center())
                         .on_press(Message::NewGame)
@@ -368,9 +372,15 @@ impl AppState {
                         .height(20)
                 ]
                 .spacing(100);
+                let your_turn;
+                if state.turn == state.role {
+                    your_turn = "Your Turn";
+                } else {
+                    your_turn = "";
+                }
 
                 center(
-                    column![title, controls, grid, stats]
+                    column![title, controls, grid, online_status, your_turn]
                         .spacing(20)
                         .width(Length::Fill)
                         .align_x(Center),
