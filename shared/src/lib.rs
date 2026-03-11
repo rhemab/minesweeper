@@ -77,7 +77,7 @@ impl MinesweeperGame {
             width,
             grid: vec![vec![Cell::default(); width]; height],
             squares_cleared: 0,
-            mine_count: height * 3,
+            mine_count: width * 2,
             flags: 0,
             game_over: false,
             game_won: false,

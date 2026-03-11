@@ -4,6 +4,8 @@ use iced::time::{self, seconds};
 use iced::widget::{button, center, column, mouse_area, row, text};
 use iced::{Center, Color, Element, Length, Subscription, Theme};
 
+use std::collections::HashSet;
+
 use shared;
 
 mod websocket;
@@ -34,11 +36,14 @@ enum AppState {
 
 struct MultiplayerState {
     game: shared::MinesweeperGame,
+    flags: HashSet<(usize, usize)>,
     connection: WebsocketState,
     turn: usize,
     role: usize,
     game_id: String,
     winner: usize,
+    player_one_name: String,
+    player_two_name: String,
 }
 
 enum WebsocketState {
@@ -79,11 +84,14 @@ impl AppState {
                 Message::Multiplayer => {
                     *self = AppState::Multiplayer(MultiplayerState {
                         game: shared::MinesweeperGame::default(),
+                        flags: HashSet::new(),
                         connection: WebsocketState::Disconnected,
                         turn: 1,
                         role: 0,
                         game_id: String::new(),
                         winner: 0,
+                        player_one_name: String::new(),
+                        player_two_name: String::new(),
                     })
                 }
                 _ => {}
@@ -147,6 +155,10 @@ impl AppState {
                         } => {
                             state.game = game;
                             state.turn = turn;
+                            // if cell is revealed, remove flag
+                            state
+                                .flags
+                                .retain(|(row, col)| !state.game.grid[*row][*col].is_revealed);
                         }
                         shared::WsMsg::GameOver { winner } => {
                             state.winner = winner;
@@ -161,6 +173,18 @@ impl AppState {
                     },
                 },
                 Message::Reveal(row, col) => {
+                    // return if flagged
+                    if state.flags.contains(&(row, col)) {
+                        return;
+                    }
+                    // return if not your turn
+                    if state.turn != state.role {
+                        return;
+                    }
+                    // return if already revealed
+                    if state.game.grid[row][col].is_revealed {
+                        return;
+                    }
                     // send move to server
                     match &mut state.connection {
                         WebsocketState::Connected(conn) => {
@@ -171,6 +195,25 @@ impl AppState {
                             });
                         }
                         _ => {}
+                    }
+                }
+                Message::Flag(row, col) => {
+                    if state.game.game_over || state.game.game_won {
+                        return;
+                    }
+                    if state.game.grid[row][col].is_revealed {
+                        return;
+                    }
+                    // if already flagged, remove flag
+                    if state.flags.contains(&(row, col)) {
+                        state.flags.remove(&(row, col));
+                    } else {
+                        // only add a flag if not revealed
+                        // don't allow more flags than mines
+                        if state.flags.len() == state.game.mine_count {
+                            return;
+                        }
+                        state.flags.insert((row, col));
                     }
                 }
                 _ => {}
@@ -272,7 +315,7 @@ impl AppState {
                 .into()
             }
             AppState::Multiplayer(state) => {
-                let grid = column((0..state.game.height).map(|y| {
+                let mut grid = column((0..state.game.height).map(|y| {
                     row((0..state.game.width).map(|x| {
                         let cell = &state.game.grid[y][x];
                         let mut number = "".to_string();
@@ -295,7 +338,7 @@ impl AppState {
                             } else if cell.is_mine {
                                 number = "💥".to_string();
                             }
-                        } else if cell.is_flaged {
+                        } else if state.flags.contains(&(y, x)) {
                             number = "🚩".to_string();
                         }
                         mouse_area(
@@ -319,6 +362,22 @@ impl AppState {
                     .into()
                 }));
 
+                let mut player_name = text("");
+                if state.role == 1 {
+                    if state.player_one_name.is_empty() {
+                        player_name = text("Player 1").size(12);
+                    } else {
+                        player_name = text(&state.player_one_name).size(12);
+                    }
+                } else if state.role == 2 {
+                    if state.player_two_name.is_empty() {
+                        player_name = text("Player 2").size(12);
+                    } else {
+                        player_name = text(&state.player_two_name).size(12);
+                    }
+                }
+                grid = grid.push(player_name);
+
                 let online_status;
                 let online_status_color;
                 match state.connection {
@@ -333,7 +392,7 @@ impl AppState {
                 };
                 let bombs_remaining = text(format!(
                     "Bombs Remaining: {}",
-                    state.game.mine_count - state.game.flags
+                    state.game.mine_count - state.flags.len()
                 ))
                 .size(12);
                 let online_status = row![
