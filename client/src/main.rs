@@ -38,7 +38,6 @@ struct MultiplayerState {
     turn: usize,
     role: usize,
     game_id: String,
-    user_id: String,
     winner: usize,
 }
 
@@ -84,7 +83,6 @@ impl AppState {
                         turn: 1,
                         role: 0,
                         game_id: String::new(),
-                        user_id: String::new(),
                         winner: 0,
                     })
                 }
@@ -137,13 +135,8 @@ impl AppState {
                         state.connection = WebsocketState::Disconnected;
                     }
                     websocket::Event::MessageReceived(message) => match message {
-                        shared::WsMsg::NewConnection {
-                            game_id,
-                            user_id,
-                            role,
-                        } => {
+                        shared::WsMsg::NewConnection { game_id, role } => {
                             state.game_id = game_id;
-                            state.user_id = user_id;
                             state.role = role;
                         }
                         shared::WsMsg::GameState {
@@ -156,7 +149,6 @@ impl AppState {
                             state.turn = turn;
                         }
                         shared::WsMsg::GameOver { winner } => {
-                            dbg!(winner);
                             state.winner = winner;
                             match &mut state.connection {
                                 WebsocketState::Connected(conn) => {
@@ -176,7 +168,6 @@ impl AppState {
                                 row,
                                 col,
                                 game_id: state.game_id.clone(),
-                                user_id: state.user_id.clone(),
                             });
                         }
                         _ => {}
@@ -337,7 +328,6 @@ impl AppState {
                 } else if state.game.game_won {
                     title_content = "Game Won!";
                 }
-                dbg!(state.winner, state.role);
                 if state.winner == state.role {
                     title_content = "Game Won!";
                 }

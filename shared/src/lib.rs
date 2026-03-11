@@ -12,7 +12,6 @@ pub enum WsMsg {
         row: usize,
         col: usize,
         game_id: String,
-        user_id: String,
     },
     Close,
 
@@ -22,7 +21,6 @@ pub enum WsMsg {
     },
     NewConnection {
         game_id: String,
-        user_id: String,
         role: usize,
     },
     GameState {

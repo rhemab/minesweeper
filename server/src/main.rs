@@ -36,7 +36,6 @@ struct Game {
 
 #[derive(Default)]
 struct Player {
-    id: String,
     name: String,
     connected: bool,
 }
@@ -52,11 +51,36 @@ async fn main() {
         .init();
 
     let app_state = AppState::default();
+    let app_state = Arc::new(Mutex::new(app_state));
+
+    // separate task to keep time
+    let app_state_clone = app_state.clone();
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(1));
+        loop {
+            interval.tick().await;
+            let mut app_state = app_state_clone.lock().await;
+            for game in app_state.games.values_mut() {
+                if game.minesweeper.running {
+                    game.minesweeper.seconds += 1;
+                    let msg = shared::WsMsg::GameState {
+                        game: game.minesweeper.clone(),
+                        player_one_name: game.player_one.name.clone(),
+                        player_two_name: game.player_two.name.clone(),
+                        turn: game.turn,
+                    };
+                    if let Err(err) = game.tx.send(msg) {
+                        error!("Error sending over channel: {}", err);
+                    }
+                }
+            }
+        }
+    });
 
     // build our application with some routes
     let app = Router::new()
         .route("/ws", any(ws_handler))
-        .with_state(Arc::new(Mutex::new(app_state)));
+        .with_state(app_state.clone());
 
     // run it with hyper
     let listener = tokio::net::TcpListener::bind("0.0.0.0:8080").await.unwrap();
@@ -81,7 +105,6 @@ async fn handle_socket(socket: WebSocket, who: SocketAddr, app_state: Arc<Mutex<
     let (tx, mut rx) = broadcast::channel::<shared::WsMsg>(32);
     let (mut sender, mut receiver) = socket.split();
     let mut game_id = String::new();
-    let user_id = Uuid::new_v4().to_string();
     let mut role = 1;
 
     {
@@ -92,7 +115,6 @@ async fn handle_socket(socket: WebSocket, who: SocketAddr, app_state: Arc<Mutex<
             if let Some(game) = app_state.games.get_mut(&waiting_game_id) {
                 rx = game.tx.subscribe();
                 game_id = waiting_game_id.clone();
-                game.player_two.id = user_id.clone();
                 game.player_two.connected = true;
                 app_state.game_waiting.clear();
                 role = 2;
@@ -103,7 +125,6 @@ async fn handle_socket(socket: WebSocket, who: SocketAddr, app_state: Arc<Mutex<
             let new_game = Game {
                 minesweeper: shared::MinesweeperGame::default(),
                 player_one: Player {
-                    id: user_id.clone(),
                     name: String::new(),
                     connected: true,
                 },
@@ -121,7 +142,6 @@ async fn handle_socket(socket: WebSocket, who: SocketAddr, app_state: Arc<Mutex<
         // send new connection msg
         let msg = shared::WsMsg::NewConnection {
             game_id: game_id.clone(),
-            user_id: user_id.clone(),
             role: role,
         };
         if let Ok(json_msg) = serde_json::to_string(&msg) {
@@ -199,9 +219,9 @@ async fn handle_socket(socket: WebSocket, who: SocketAddr, app_state: Arc<Mutex<
     println!("Websocket context {who} destroyed");
     let mut app_state = app_state.lock().await;
     if let Some(game) = app_state.games.get_mut(&game_id) {
-        if game.player_one.id == user_id {
+        if role == 1 {
             game.player_one.connected = false;
-        } else if game.player_two.id == user_id {
+        } else if role == 2 {
             game.player_two.connected = false;
         }
         if !game.player_one.connected && !game.player_two.connected {
@@ -219,12 +239,7 @@ async fn process_message(
         Message::Text(t) => {
             if let Ok(ws_msg) = serde_json::from_str::<shared::WsMsg>(&t) {
                 match ws_msg {
-                    shared::WsMsg::NewMove {
-                        row,
-                        col,
-                        game_id,
-                        user_id: _,
-                    } => {
+                    shared::WsMsg::NewMove { row, col, game_id } => {
                         let mut app_state = app_state.lock().await;
                         if let Some(game) = app_state.games.get_mut(&game_id) {
                             if !game.minesweeper.game_won && !game.minesweeper.game_over {
