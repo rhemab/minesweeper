@@ -192,10 +192,9 @@ impl AppState {
             )
             .into(),
             AppState::SinglePlayer(game) => {
-                let grid_size = game.grid_size;
-                let grid = column((0..grid_size).map(|y| {
-                    row((0..grid_size).map(|x| {
-                        let cell = &game.grid[x][y];
+                let grid = column((0..game.height).map(|y| {
+                    row((0..game.width).map(|x| {
+                        let cell = &game.grid[y][x];
                         let mut number = "".to_string();
                         let mut cell_color = Color::from_rgb(0.5, 0.5, 0.5);
                         let text_color = match cell.number {
@@ -233,8 +232,8 @@ impl AppState {
                                 .width(32)
                                 .height(32),
                         )
-                        .on_press(Message::Reveal(x, y))
-                        .on_right_press(Message::Flag(x, y))
+                        .on_press(Message::Reveal(y, x))
+                        .on_right_press(Message::Flag(y, x))
                         .into()
                     }))
                     .into()
@@ -273,10 +272,9 @@ impl AppState {
                 .into()
             }
             AppState::Multiplayer(state) => {
-                let grid_size = state.game.grid_size;
-                let grid = column((0..grid_size).map(|y| {
-                    row((0..grid_size).map(|x| {
-                        let cell = &state.game.grid[x][y];
+                let grid = column((0..state.game.height).map(|y| {
+                    row((0..state.game.width).map(|x| {
+                        let cell = &state.game.grid[y][x];
                         let mut number = "".to_string();
                         let mut cell_color = Color::from_rgb(0.5, 0.5, 0.5);
                         let text_color = match cell.number {
@@ -314,8 +312,8 @@ impl AppState {
                                 .width(32)
                                 .height(32),
                         )
-                        .on_press(Message::Reveal(x, y))
-                        .on_right_press(Message::Flag(x, y))
+                        .on_press(Message::Reveal(y, x))
+                        .on_right_press(Message::Flag(y, x))
                         .into()
                     }))
                     .into()

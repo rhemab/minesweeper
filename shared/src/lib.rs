@@ -2,9 +2,6 @@ use rand::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 
-const DEFAULT_GRID_SIZE: usize = 15;
-const DEFAULT_MINE_COUNT: usize = DEFAULT_GRID_SIZE * 2;
-
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub enum WsMsg {
     // receive from client
@@ -33,7 +30,8 @@ pub enum WsMsg {
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct MinesweeperGame {
-    pub grid_size: usize,
+    pub height: usize,
+    pub width: usize,
     pub grid: Vec<Vec<Cell>>,
     pub squares_cleared: usize,
     pub mine_count: usize,
@@ -46,11 +44,14 @@ pub struct MinesweeperGame {
 
 impl Default for MinesweeperGame {
     fn default() -> Self {
+        let height = 10;
+        let width = 30;
         let game = Self {
-            grid_size: DEFAULT_GRID_SIZE,
-            grid: vec![vec![Cell::default(); DEFAULT_GRID_SIZE]; DEFAULT_GRID_SIZE],
+            height,
+            width,
+            grid: vec![vec![Cell::default(); width]; height],
             squares_cleared: 0,
-            mine_count: DEFAULT_MINE_COUNT,
+            mine_count: height * 3,
             flags: 0,
             game_over: false,
             game_won: false,
@@ -70,8 +71,24 @@ pub struct Cell {
 }
 
 impl MinesweeperGame {
+    pub fn new(height: usize, width: usize) -> Self {
+        let game = Self {
+            height,
+            width,
+            grid: vec![vec![Cell::default(); width]; height],
+            squares_cleared: 0,
+            mine_count: height * 3,
+            flags: 0,
+            game_over: false,
+            game_won: false,
+            running: false,
+            seconds: 0,
+        };
+        game
+    }
+
     pub fn check_game_won(&mut self) {
-        let num_clear_squares = (DEFAULT_GRID_SIZE * DEFAULT_GRID_SIZE) - DEFAULT_MINE_COUNT;
+        let num_clear_squares = (self.height * self.width) - self.mine_count;
         if self.squares_cleared == num_clear_squares {
             self.game_won = true;
         }
@@ -81,8 +98,8 @@ impl MinesweeperGame {
         let mut rng = rand::rng();
         let mut mines_placed = 0;
         while mines_placed < self.mine_count {
-            let row = rng.random_range(0..self.grid_size);
-            let col = rng.random_range(0..self.grid_size);
+            let row = rng.random_range(0..self.height);
+            let col = rng.random_range(0..self.width);
             if !self.grid[row][col].is_mine {
                 if row == selected_row && col == selected_col {
                     continue;
@@ -133,8 +150,8 @@ impl MinesweeperGame {
     }
 
     pub fn compute_cell_numbers(&mut self) {
-        for row in 0..self.grid_size {
-            for col in 0..self.grid_size {
+        for row in 0..self.height {
+            for col in 0..self.width {
                 // skip if is mine
                 if self.grid[row][col].is_mine {
                     continue;
@@ -163,9 +180,9 @@ impl MinesweeperGame {
                 let new_row = row as i32 + row_diff;
                 let new_col = col as i32 + col_diff;
                 if new_row >= 0
-                    && new_row < self.grid_size as i32
+                    && new_row < self.height as i32
                     && new_col >= 0
-                    && new_col < self.grid_size as i32
+                    && new_col < self.width as i32
                 {
                     result.push((new_row as usize, new_col as usize));
                 }

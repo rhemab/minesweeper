@@ -123,7 +123,7 @@ async fn handle_socket(socket: WebSocket, who: SocketAddr, app_state: Arc<Mutex<
         if game_id.is_empty() {
             // create a new game
             let new_game = Game {
-                minesweeper: shared::MinesweeperGame::default(),
+                minesweeper: shared::MinesweeperGame::new(20, 40),
                 player_one: Player {
                     name: String::new(),
                     connected: true,
