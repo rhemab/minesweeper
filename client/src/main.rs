@@ -2,7 +2,7 @@
 
 use iced::time::{self, seconds};
 use iced::widget::{button, center, column, mouse_area, row, text};
-use iced::{Center, Color, Element, Length, Subscription, Theme};
+use iced::{Center, Color, Element, Length, Subscription, Task, Theme};
 
 use std::collections::HashSet;
 
@@ -30,10 +30,12 @@ pub fn main() -> iced::Result {
 enum AppState {
     #[default]
     MainMenu,
+    Loading,
     SinglePlayer(shared::MinesweeperGame),
     Multiplayer(MultiplayerState),
 }
 
+#[derive(Default)]
 struct MultiplayerState {
     game: shared::MinesweeperGame,
     flags: HashSet<(usize, usize)>,
@@ -46,8 +48,10 @@ struct MultiplayerState {
     player_two_name: String,
 }
 
+#[derive(Default)]
 enum WebsocketState {
     Connected(websocket::Connection),
+    #[default]
     Disconnected,
 }
 
@@ -68,11 +72,11 @@ impl AppState {
         Theme::CatppuccinFrappe
     }
 
-    fn update(&mut self, message: Message) {
+    fn update(&mut self, message: Message) -> Task<Message> {
         match message {
             Message::MainMenu => {
                 *self = AppState::MainMenu;
-                return;
+                return Task::none();
             }
             _ => {}
         }
@@ -80,6 +84,7 @@ impl AppState {
             AppState::MainMenu => match message {
                 Message::SinglePlayer => {
                     *self = AppState::SinglePlayer(shared::MinesweeperGame::default());
+                    return Task::none();
                 }
                 Message::Multiplayer => {
                     *self = AppState::Multiplayer(MultiplayerState {
@@ -92,9 +97,12 @@ impl AppState {
                         winner: 0,
                         player_one_name: String::new(),
                         player_two_name: String::new(),
-                    })
+                    });
+                    return Task::none();
                 }
-                _ => {}
+                _ => {
+                    return Task::none();
+                }
             },
             AppState::SinglePlayer(game) => {
                 match message {
@@ -107,15 +115,16 @@ impl AppState {
                         }
                         game.flood_fill(row, col);
                         game.check_game_won();
+                        return Task::none();
                     }
                     Message::Flag(row, col) => {
                         if game.game_over || game.game_won {
-                            return;
+                            return Task::none();
                         }
                         if !game.grid[row][col].is_flaged && !game.grid[row][col].is_revealed {
                             // don't allow more flags than mines
                             if game.flags == game.mine_count {
-                                return;
+                                return Task::none();
                             }
                             game.grid[row][col].is_flaged = true;
                             game.flags += 1;
@@ -123,29 +132,60 @@ impl AppState {
                             game.grid[row][col].is_flaged = false;
                             game.flags -= 1;
                         }
+                        return Task::none();
                     }
                     Message::NewGame => {
                         *game = shared::MinesweeperGame::default();
+                        return Task::none();
                     }
                     Message::Tick => {
                         game.seconds += 1;
+                        return Task::none();
+                    }
+                    _ => {
+                        return Task::none();
+                    }
+                }
+            }
+            AppState::Loading => {
+                match message {
+                    Message::Multiplayer => {
+                        *self = AppState::Multiplayer(MultiplayerState {
+                            game: shared::MinesweeperGame::default(),
+                            flags: HashSet::new(),
+                            connection: WebsocketState::Disconnected,
+                            turn: 1,
+                            role: 0,
+                            game_id: String::new(),
+                            winner: 0,
+                            player_one_name: String::new(),
+                            player_two_name: String::new(),
+                        });
+                        return Task::none();
                     }
                     _ => {}
                 }
+                return Task::none();
             }
             AppState::Multiplayer(state) => match message {
-                Message::NewGame => {}
+                Message::NewGame => {
+                    *self = AppState::Loading;
+                    return Task::perform(async {}, |_| Message::Multiplayer);
+                }
                 Message::WebsocketEvent(event) => match event {
                     websocket::Event::Connected(connection) => {
                         state.connection = WebsocketState::Connected(connection);
+                        return Task::none();
                     }
                     websocket::Event::Disconnected => {
                         state.connection = WebsocketState::Disconnected;
+                        return Task::none();
                     }
                     websocket::Event::MessageReceived(message) => match message {
                         shared::WsMsg::NewConnection { game_id, role } => {
                             state.game_id = game_id;
                             state.role = role;
+                            return Task::none();
                         }
                         shared::WsMsg::GameState {
                             game,
@@ -159,6 +199,7 @@ impl AppState {
                             state
                                 .flags
                                 .retain(|(row, col)| !state.game.grid[*row][*col].is_revealed);
+                            return Task::none();
                         }
                         shared::WsMsg::GameOver { winner } => {
                             state.winner = winner;
@@ -168,22 +209,25 @@ impl AppState {
                                 }
                                 _ => {}
                             }
+                            return Task::none();
                         }
-                        _ => {}
+                        _ => {
+                            return Task::none();
+                        }
                     },
                 },
                 Message::Reveal(row, col) => {
                     // return if flagged
                     if state.flags.contains(&(row, col)) {
-                        return;
+                        return Task::none();
                     }
                     // return if not your turn
                     if state.turn != state.role {
-                        return;
+                        return Task::none();
                     }
                     // return if already revealed
                     if state.game.grid[row][col].is_revealed {
-                        return;
+                        return Task::none();
                     }
                     // send move to server
                     match &mut state.connection {
@@ -196,13 +240,14 @@ impl AppState {
                         }
                         _ => {}
                     }
+                    return Task::none();
                 }
                 Message::Flag(row, col) => {
                     if state.game.game_over || state.game.game_won {
-                        return;
+                        return Task::none();
                     }
                     if state.game.grid[row][col].is_revealed {
-                        return;
+                        return Task::none();
                     }
                     // if already flagged, remove flag
                     if state.flags.contains(&(row, col)) {
@@ -211,12 +256,15 @@ impl AppState {
                         // only add a flag if not revealed
                         // don't allow more flags than mines
                         if state.flags.len() == state.game.mine_count {
-                            return;
+                            return Task::none();
                         }
                         state.flags.insert((row, col));
                     }
+                    return Task::none();
                 }
-                _ => {}
+                _ => {
+                    return Task::none();
+                }
             },
         }
     }
@@ -314,6 +362,7 @@ impl AppState {
                 )
                 .into()
             }
+            AppState::Loading => center(text("Connecting...")).into(),
             AppState::Multiplayer(state) => {
                 let mut grid = column((0..state.game.height).map(|y| {
                     row((0..state.game.width).map(|x| {
@@ -459,6 +508,7 @@ impl AppState {
             AppState::Multiplayer(_) => {
                 Subscription::run(websocket::connect).map(Message::WebsocketEvent)
             }
+            _ => Subscription::none(),
         }
     }
 }
