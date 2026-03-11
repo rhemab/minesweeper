@@ -17,7 +17,7 @@ use shared;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::{Mutex, broadcast};
-use tracing::error;
+use tracing::{error, info};
 use uuid::Uuid;
 
 #[derive(Default)]
@@ -164,6 +164,7 @@ async fn handle_socket(socket: WebSocket, who: SocketAddr, app_state: Arc<Mutex<
                 }
             }
         }
+        info!("Games: {}", app_state.games.len());
     }
 
     // receive messages on the channel and
@@ -221,13 +222,22 @@ async fn handle_socket(socket: WebSocket, who: SocketAddr, app_state: Arc<Mutex<
     if let Some(game) = app_state.games.get_mut(&game_id) {
         if role == 1 {
             game.player_one.connected = false;
+            let game_over = shared::WsMsg::GameOver { winner: 2 };
+            if let Err(err) = game.tx.send(game_over) {
+                error!("Error sending over channel: {}", err);
+            }
         } else if role == 2 {
             game.player_two.connected = false;
+            let game_over = shared::WsMsg::GameOver { winner: 1 };
+            if let Err(err) = game.tx.send(game_over) {
+                error!("Error sending over channel: {}", err);
+            }
         }
         if !game.player_one.connected && !game.player_two.connected {
             app_state.games.remove_entry(&game_id);
         }
     }
+    info!("Games: {}", app_state.games.len());
 }
 
 async fn process_message(
@@ -242,7 +252,11 @@ async fn process_message(
                     shared::WsMsg::NewMove { row, col, game_id } => {
                         let mut app_state = app_state.lock().await;
                         if let Some(game) = app_state.games.get_mut(&game_id) {
-                            if !game.minesweeper.game_won && !game.minesweeper.game_over {
+                            if !game.minesweeper.game_won
+                                && !game.minesweeper.game_over
+                                && game.player_one.connected
+                                && game.player_two.connected
+                            {
                                 // make move
                                 if game.turn == 1 && role == 1 {
                                     // only generate bombs after first click

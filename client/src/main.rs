@@ -1,7 +1,7 @@
 #![windows_subsystem = "windows"]
 
 use iced::time::{self, seconds};
-use iced::widget::{Space, button, center, column, mouse_area, row, text};
+use iced::widget::{button, center, column, mouse_area, row, text};
 use iced::{Center, Color, Element, Length, Subscription, Theme};
 
 use shared;
@@ -248,10 +248,9 @@ impl AppState {
                 }
                 let timer = text(format!("{}:{:02}", game.seconds / 60, game.seconds % 60));
                 let title = text(title_content);
-                let stats = row![text(format!(
-                    "Bombs Remaining: {}",
-                    game.mine_count - game.flags
-                ))];
+                let stats = row![
+                    text(format!("Bombs Remaining: {}", game.mine_count - game.flags)).size(12)
+                ];
                 let controls = row![
                     button(text("New Game").size(12).center())
                         .on_press(Message::NewGame)
@@ -267,7 +266,7 @@ impl AppState {
 
                 center(
                     column![title, controls, grid, stats]
-                        .spacing(20)
+                        .spacing(10)
                         .width(Length::Fill)
                         .align_x(Center),
                 )
@@ -381,7 +380,7 @@ impl AppState {
 
                 center(
                     column![title, controls, grid, online_status, your_turn]
-                        .spacing(20)
+                        .spacing(10)
                         .width(Length::Fill)
                         .align_x(Center),
                 )
