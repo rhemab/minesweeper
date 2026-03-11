@@ -9,7 +9,7 @@ use async_tungstenite::tungstenite;
 
 pub fn connect() -> impl Sipper<(), Event> {
     sipper(async |mut output| {
-        const ECHO_SERVER: &str = "wss://0.0.0.0:8080/ws";
+        const ECHO_SERVER: &str = "wss://minesweeper-production-007e.up.railway.app/ws";
 
         let (mut websocket, mut input) =
             match async_tungstenite::tokio::connect_async(ECHO_SERVER).await {
