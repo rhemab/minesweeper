@@ -222,15 +222,20 @@ async fn handle_socket(socket: WebSocket, who: SocketAddr, app_state: Arc<Mutex<
     if let Some(game) = app_state.games.get_mut(&game_id) {
         if role == 1 {
             game.player_one.connected = false;
-            let game_over = shared::WsMsg::GameOver { winner: 2 };
-            if let Err(err) = game.tx.send(game_over) {
-                error!("Error sending over channel: {}", err);
+            // only send game over if game is not over
+            if !game.minesweeper.game_won && !game.minesweeper.game_over {
+                let game_over = shared::WsMsg::GameOver { winner: 2 };
+                if let Err(err) = game.tx.send(game_over) {
+                    error!("Error sending over channel: {}", err);
+                }
             }
         } else if role == 2 {
             game.player_two.connected = false;
-            let game_over = shared::WsMsg::GameOver { winner: 1 };
-            if let Err(err) = game.tx.send(game_over) {
-                error!("Error sending over channel: {}", err);
+            if !game.minesweeper.game_won && !game.minesweeper.game_over {
+                let game_over = shared::WsMsg::GameOver { winner: 1 };
+                if let Err(err) = game.tx.send(game_over) {
+                    error!("Error sending over channel: {}", err);
+                }
             }
         }
         if !game.player_one.connected && !game.player_two.connected {
