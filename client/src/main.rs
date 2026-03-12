@@ -8,6 +8,8 @@ use std::collections::HashSet;
 
 use shared;
 
+use clap::Parser;
+
 mod websocket;
 
 const BLUE: Color = Color::from_rgb(0.0, 0.0, 1.0);
@@ -18,6 +20,16 @@ const DARK_RED: Color = Color::from_rgb(0.5, 0.0, 0.0);
 const TEAL: Color = Color::from_rgb(0.0, 0.5, 0.5);
 const BLACK: Color = Color::BLACK;
 const GRAY: Color = Color::from_rgb(0.5, 0.5, 0.5);
+
+#[derive(Parser, Debug)]
+struct Args {
+    #[arg(
+        short,
+        long,
+        default_value_t = String::from("wss://minesweeper-production-007e.up.railway.app/ws")
+    )]
+    url: String,
+}
 
 pub fn main() -> iced::Result {
     iced::application(AppState::default, AppState::update, AppState::view)
@@ -37,6 +49,7 @@ enum AppState {
 
 #[derive(Default)]
 struct MultiplayerState {
+    url: String,
     game: shared::MinesweeperGame,
     flags: HashSet<(usize, usize)>,
     connection: WebsocketState,
@@ -51,6 +64,7 @@ struct MultiplayerState {
 #[derive(Default)]
 enum WebsocketState {
     Connected(websocket::Connection),
+    Connecting,
     #[default]
     Disconnected,
 }
@@ -87,10 +101,12 @@ impl AppState {
                     return Task::none();
                 }
                 Message::Multiplayer => {
+                    let args = Args::parse();
                     *self = AppState::Multiplayer(MultiplayerState {
-                        game: shared::MinesweeperGame::default(),
+                        url: args.url.clone(),
+                        game: shared::MinesweeperGame::new(0, 0),
                         flags: HashSet::new(),
-                        connection: WebsocketState::Disconnected,
+                        connection: WebsocketState::Connecting,
                         turn: 1,
                         role: 0,
                         game_id: String::new(),
@@ -150,10 +166,12 @@ impl AppState {
             AppState::Loading => {
                 match message {
                     Message::Multiplayer => {
+                        let args = Args::parse();
                         *self = AppState::Multiplayer(MultiplayerState {
-                            game: shared::MinesweeperGame::default(),
+                            url: args.url.clone(),
+                            game: shared::MinesweeperGame::new(0, 0),
                             flags: HashSet::new(),
-                            connection: WebsocketState::Disconnected,
+                            connection: WebsocketState::Connecting,
                             turn: 1,
                             role: 0,
                             game_id: String::new(),
@@ -367,6 +385,12 @@ impl AppState {
             }
             AppState::Loading => center(text("Connecting...")).into(),
             AppState::Multiplayer(state) => {
+                match state.connection {
+                    WebsocketState::Connecting => {
+                        return center(text("Connecting...")).into();
+                    }
+                    _ => {}
+                }
                 let mut grid = column((0..state.game.height).map(|y| {
                     row((0..state.game.width).map(|x| {
                         let cell = &state.game.grid[y][x];
@@ -433,13 +457,13 @@ impl AppState {
                 let online_status;
                 let online_status_color;
                 match state.connection {
-                    WebsocketState::Disconnected => {
-                        online_status = "Multiplayer Disconnected";
-                        online_status_color = RED;
-                    }
                     WebsocketState::Connected(_) => {
                         online_status = "Multiplayer Connected";
                         online_status_color = GREEN;
+                    }
+                    _ => {
+                        online_status = "Multiplayer Disconnected";
+                        online_status_color = RED;
                     }
                 };
                 let bombs_remaining = text(format!(
@@ -508,8 +532,9 @@ impl AppState {
                     Subscription::none()
                 }
             }
-            AppState::Multiplayer(_) => {
-                Subscription::run(websocket::connect).map(Message::WebsocketEvent)
+            AppState::Multiplayer(state) => {
+                Subscription::run_with(state.url.clone(), |u| websocket::connect(u.to_string()))
+                    .map(Message::WebsocketEvent)
             }
             _ => Subscription::none(),
         }

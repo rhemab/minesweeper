@@ -7,25 +7,22 @@ use futures::stream::StreamExt;
 
 use async_tungstenite::tungstenite;
 
-pub fn connect() -> impl Sipper<(), Event> {
+pub fn connect(url: String) -> impl Sipper<(), Event> {
     sipper(async |mut output| {
-        const ECHO_SERVER: &str = "wss://minesweeper-production-007e.up.railway.app/ws";
+        let (mut websocket, mut input) = match async_tungstenite::tokio::connect_async(url).await {
+            Ok((websocket, _)) => {
+                dbg!("websocket connected!");
+                let (sender, receiver) = mpsc::channel(100);
 
-        let (mut websocket, mut input) =
-            match async_tungstenite::tokio::connect_async(ECHO_SERVER).await {
-                Ok((websocket, _)) => {
-                    dbg!("websocket connected!");
-                    let (sender, receiver) = mpsc::channel(100);
+                output.send(Event::Connected(Connection(sender))).await;
 
-                    output.send(Event::Connected(Connection(sender))).await;
-
-                    (websocket.fuse(), receiver)
-                }
-                Err(err) => {
-                    dbg!("websocket error: {}", err);
-                    return;
-                }
-            };
+                (websocket.fuse(), receiver)
+            }
+            Err(err) => {
+                dbg!("websocket error: {}", err);
+                return;
+            }
+        };
 
         loop {
             futures::select! {
