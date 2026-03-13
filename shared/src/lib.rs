@@ -22,10 +22,16 @@ pub enum WsMsg {
     },
     GameState {
         game: MinesweeperGame,
-        player_one_name: String,
-        player_two_name: String,
+        player_one: Player,
+        player_two: Player,
         turn: usize,
     },
+}
+
+#[derive(Default, Debug, Serialize, Deserialize, Clone)]
+pub struct Player {
+    pub name: String,
+    pub connected: bool,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]

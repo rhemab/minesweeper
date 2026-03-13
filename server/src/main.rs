@@ -28,16 +28,10 @@ struct AppState {
 
 struct Game {
     minesweeper: shared::MinesweeperGame,
-    player_one: Player,
-    player_two: Player,
+    player_one: shared::Player,
+    player_two: shared::Player,
     turn: usize,
     tx: broadcast::Sender<shared::WsMsg>,
-}
-
-#[derive(Default)]
-struct Player {
-    name: String,
-    connected: bool,
 }
 
 #[tokio::main]
@@ -61,12 +55,15 @@ async fn main() {
             interval.tick().await;
             let mut app_state = app_state_clone.lock().await;
             for game in app_state.games.values_mut() {
-                if game.minesweeper.running {
+                if game.minesweeper.running
+                    && !game.minesweeper.game_over
+                    && !game.minesweeper.game_won
+                {
                     game.minesweeper.seconds += 1;
                     let msg = shared::WsMsg::GameState {
                         game: game.minesweeper.clone(),
-                        player_one_name: game.player_one.name.clone(),
-                        player_two_name: game.player_two.name.clone(),
+                        player_one: game.player_one.clone(),
+                        player_two: game.player_two.clone(),
                         turn: game.turn,
                     };
                     if let Err(err) = game.tx.send(msg) {
@@ -116,6 +113,7 @@ async fn handle_socket(socket: WebSocket, who: SocketAddr, app_state: Arc<Mutex<
                 rx = game.tx.subscribe();
                 game_id = waiting_game_id.clone();
                 game.player_two.connected = true;
+                game.turn = 1;
                 app_state.game_waiting.clear();
                 role = 2;
             }
@@ -124,12 +122,12 @@ async fn handle_socket(socket: WebSocket, who: SocketAddr, app_state: Arc<Mutex<
             // create a new game
             let new_game = Game {
                 minesweeper: shared::MinesweeperGame::new(20, 40),
-                player_one: Player {
+                player_one: shared::Player {
                     name: String::new(),
                     connected: true,
                 },
-                player_two: Player::default(),
-                turn: 1,
+                player_two: shared::Player::default(),
+                turn: 0,
                 tx,
             };
             rx = new_game.tx.subscribe();
@@ -139,7 +137,7 @@ async fn handle_socket(socket: WebSocket, who: SocketAddr, app_state: Arc<Mutex<
             app_state.games.insert(new_game_id, new_game);
         }
 
-        // send new connection msg
+        // send new connection msg only to this client
         let msg = shared::WsMsg::NewConnection {
             game_id: game_id.clone(),
             role: role,
@@ -150,18 +148,16 @@ async fn handle_socket(socket: WebSocket, who: SocketAddr, app_state: Arc<Mutex<
             }
         }
 
-        // send initial game state
+        // send initial game state to both players
         if let Some(game) = app_state.games.get(&game_id) {
             let msg = shared::WsMsg::GameState {
                 game: game.minesweeper.clone(),
-                player_one_name: game.player_one.name.clone(),
-                player_two_name: game.player_two.name.clone(),
+                player_one: game.player_one.clone(),
+                player_two: game.player_two.clone(),
                 turn: game.turn,
             };
-            if let Ok(json_msg) = serde_json::to_string(&msg) {
-                if let Err(err) = sender.send(Message::Text(json_msg.into())).await {
-                    error!("ws error sending initial msg: {}", err);
-                }
+            if let Err(err) = game.tx.send(msg) {
+                error!("Error sending over channel: {}", err);
             }
         }
         info!("Games: {}", app_state.games.len());
@@ -274,8 +270,8 @@ async fn process_message(
                                     // send game state back to clients
                                     let new_game_state = shared::WsMsg::GameState {
                                         game: game.minesweeper.clone(),
-                                        player_one_name: game.player_one.name.clone(),
-                                        player_two_name: game.player_two.name.clone(),
+                                        player_one: game.player_one.clone(),
+                                        player_two: game.player_two.clone(),
                                         turn: 0,
                                     };
                                     if let Err(err) = game.tx.send(new_game_state) {
@@ -286,7 +282,7 @@ async fn process_message(
                                         if let Err(err) = game.tx.send(game_over) {
                                             error!("Error sending over channel: {}", err);
                                         }
-                                        return ControlFlow::Break(());
+                                        return ControlFlow::Continue(());
                                     }
                                     game.minesweeper.check_game_won();
                                     if game.minesweeper.game_won {
@@ -294,14 +290,14 @@ async fn process_message(
                                         if let Err(err) = game.tx.send(game_over) {
                                             error!("Error sending over channel: {}", err);
                                         }
-                                        return ControlFlow::Break(());
+                                        return ControlFlow::Continue(());
                                     }
                                     game.turn += 1;
                                     // send game state back to clients
                                     let new_game_state = shared::WsMsg::GameState {
                                         game: game.minesweeper.clone(),
-                                        player_one_name: game.player_one.name.clone(),
-                                        player_two_name: game.player_two.name.clone(),
+                                        player_one: game.player_one.clone(),
+                                        player_two: game.player_two.clone(),
                                         turn: game.turn,
                                     };
                                     if let Err(err) = game.tx.send(new_game_state) {
@@ -312,8 +308,8 @@ async fn process_message(
                                     // send game state back to clients
                                     let new_game_state = shared::WsMsg::GameState {
                                         game: game.minesweeper.clone(),
-                                        player_one_name: game.player_one.name.clone(),
-                                        player_two_name: game.player_two.name.clone(),
+                                        player_one: game.player_one.clone(),
+                                        player_two: game.player_two.clone(),
                                         turn: 0,
                                     };
                                     if let Err(err) = game.tx.send(new_game_state) {
@@ -324,7 +320,7 @@ async fn process_message(
                                         if let Err(err) = game.tx.send(game_over) {
                                             error!("Error sending over channel: {}", err);
                                         }
-                                        return ControlFlow::Break(());
+                                        return ControlFlow::Continue(());
                                     }
                                     game.minesweeper.check_game_won();
                                     if game.minesweeper.game_won {
@@ -332,14 +328,14 @@ async fn process_message(
                                         if let Err(err) = game.tx.send(game_over) {
                                             error!("Error sending over channel: {}", err);
                                         }
-                                        return ControlFlow::Break(());
+                                        return ControlFlow::Continue(());
                                     }
                                     game.turn -= 1;
                                     // send game state back to clients
                                     let new_game_state = shared::WsMsg::GameState {
                                         game: game.minesweeper.clone(),
-                                        player_one_name: game.player_one.name.clone(),
-                                        player_two_name: game.player_two.name.clone(),
+                                        player_one: game.player_one.clone(),
+                                        player_two: game.player_two.clone(),
                                         turn: game.turn,
                                     };
                                     if let Err(err) = game.tx.send(new_game_state) {

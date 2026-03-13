@@ -210,8 +210,8 @@ impl AppState {
                         }
                         shared::WsMsg::GameState {
                             game,
-                            player_one_name: _,
-                            player_two_name: _,
+                            player_one: _,
+                            player_two: _,
                             turn,
                         } => {
                             state.game = game;
@@ -224,12 +224,6 @@ impl AppState {
                         }
                         shared::WsMsg::GameOver { winner } => {
                             state.winner = winner;
-                            match &mut state.connection {
-                                WebsocketState::Connected(conn) => {
-                                    conn.send(shared::WsMsg::Close);
-                                }
-                                _ => {}
-                            }
                             return Task::none();
                         }
                         _ => {
@@ -458,11 +452,11 @@ impl AppState {
                 let online_status_color;
                 match state.connection {
                     WebsocketState::Connected(_) => {
-                        online_status = "Multiplayer Connected";
+                        online_status = "Connected";
                         online_status_color = GREEN;
                     }
                     _ => {
-                        online_status = "Multiplayer Disconnected";
+                        online_status = "Disconnected";
                         online_status_color = RED;
                     }
                 };
@@ -507,6 +501,8 @@ impl AppState {
                 let your_turn;
                 if state.turn == state.role {
                     your_turn = "Your Turn";
+                } else if state.turn == 0 && !state.game.game_over && !state.game.game_won {
+                    your_turn = "Waiting for other player...";
                 } else {
                     your_turn = "";
                 }
