@@ -9,6 +9,10 @@ pub enum WsMsg {
         row: usize,
         col: usize,
         game_id: String,
+        elapsed_ms: u128,
+    },
+    PlayerTimeout {
+        game_id: String,
     },
     Close,
 
@@ -25,6 +29,7 @@ pub enum WsMsg {
         player_one: Player,
         player_two: Player,
         turn: usize,
+        winner: usize,
     },
 }
 
@@ -32,6 +37,8 @@ pub enum WsMsg {
 pub struct Player {
     pub name: String,
     pub connected: bool,
+    pub time_remaining: u128,
+    pub first_move: bool,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -57,7 +64,7 @@ impl Default for MinesweeperGame {
             width,
             grid: vec![vec![Cell::default(); width]; height],
             squares_cleared: 0,
-            mine_count: height * 3,
+            mine_count: width * 3,
             flags: 0,
             game_over: false,
             game_won: false,
@@ -83,7 +90,7 @@ impl MinesweeperGame {
             width,
             grid: vec![vec![Cell::default(); width]; height],
             squares_cleared: 0,
-            mine_count: width * 2,
+            mine_count: width * 3,
             flags: 0,
             game_over: false,
             game_won: false,

@@ -10,6 +10,8 @@ use shared;
 
 use clap::Parser;
 
+use std::time::SystemTime;
+
 mod websocket;
 
 const BLUE: Color = Color::from_rgb(0.0, 0.0, 1.0);
@@ -57,8 +59,9 @@ struct MultiplayerState {
     role: usize,
     game_id: String,
     winner: usize,
-    player_one_name: String,
-    player_two_name: String,
+    player_one: shared::Player,
+    player_two: shared::Player,
+    received_ts: u128,
 }
 
 #[derive(Default)]
@@ -105,14 +108,9 @@ impl AppState {
                     *self = AppState::Multiplayer(MultiplayerState {
                         url: args.url.clone(),
                         game: shared::MinesweeperGame::new(0, 0),
-                        flags: HashSet::new(),
                         connection: WebsocketState::Connecting,
                         turn: 1,
-                        role: 0,
-                        game_id: String::new(),
-                        winner: 0,
-                        player_one_name: String::new(),
-                        player_two_name: String::new(),
+                        ..MultiplayerState::default()
                     });
                     return Task::none();
                 }
@@ -170,14 +168,9 @@ impl AppState {
                         *self = AppState::Multiplayer(MultiplayerState {
                             url: args.url.clone(),
                             game: shared::MinesweeperGame::new(0, 0),
-                            flags: HashSet::new(),
                             connection: WebsocketState::Connecting,
                             turn: 1,
-                            role: 0,
-                            game_id: String::new(),
-                            winner: 0,
-                            player_one_name: String::new(),
-                            player_two_name: String::new(),
+                            ..MultiplayerState::default()
                         });
                         return Task::none();
                     }
@@ -192,6 +185,40 @@ impl AppState {
                         tokio::time::sleep(tokio::time::Duration::from_millis(500)),
                         |_| Message::Multiplayer,
                     );
+                }
+                Message::Tick => {
+                    match state.turn {
+                        1 => {
+                            if state.player_one.time_remaining >= 1_000 {
+                                state.player_one.time_remaining -= 1_000;
+                            } else if state.turn == state.role {
+                                match &mut state.connection {
+                                    WebsocketState::Connected(conn) => {
+                                        conn.send(shared::WsMsg::PlayerTimeout {
+                                            game_id: state.game_id.clone(),
+                                        });
+                                    }
+                                    _ => {}
+                                }
+                            }
+                        }
+                        2 => {
+                            if state.player_two.time_remaining >= 1_000 {
+                                state.player_two.time_remaining -= 1_000;
+                            } else if state.turn == state.role {
+                                match &mut state.connection {
+                                    WebsocketState::Connected(conn) => {
+                                        conn.send(shared::WsMsg::PlayerTimeout {
+                                            game_id: state.game_id.clone(),
+                                        });
+                                    }
+                                    _ => {}
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
+                    Task::none()
                 }
                 Message::WebsocketEvent(event) => match event {
                     websocket::Event::Connected(connection) => {
@@ -210,20 +237,26 @@ impl AppState {
                         }
                         shared::WsMsg::GameState {
                             game,
-                            player_one: _,
-                            player_two: _,
+                            player_one,
+                            player_two,
                             turn,
+                            winner,
                         } => {
+                            // save received_ts
+                            if let Ok(ts) = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH)
+                            {
+                                state.received_ts = ts.as_millis();
+                            }
+
+                            state.winner = winner;
+                            state.player_one = player_one;
+                            state.player_two = player_two;
                             state.game = game;
                             state.turn = turn;
                             // if cell is revealed, remove flag
                             state
                                 .flags
                                 .retain(|(row, col)| !state.game.grid[*row][*col].is_revealed);
-                            return Task::none();
-                        }
-                        shared::WsMsg::GameOver { winner } => {
-                            state.winner = winner;
                             return Task::none();
                         }
                         _ => {
@@ -247,11 +280,16 @@ impl AppState {
                     // send move to server
                     match &mut state.connection {
                         WebsocketState::Connected(conn) => {
-                            conn.send(shared::WsMsg::NewMove {
-                                row,
-                                col,
-                                game_id: state.game_id.clone(),
-                            });
+                            if let Ok(ts) = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH)
+                            {
+                                let elapsed_ms = ts.as_millis() - state.received_ts;
+                                conn.send(shared::WsMsg::NewMove {
+                                    row,
+                                    col,
+                                    game_id: state.game_id.clone(),
+                                    elapsed_ms,
+                                });
+                            }
                         }
                         _ => {}
                     }
@@ -385,7 +423,25 @@ impl AppState {
                     }
                     _ => {}
                 }
-                let mut grid = column((0..state.game.height).map(|y| {
+                let mut grid = column![];
+                let top_player;
+                if state.role == 2 {
+                    top_player = text(format!(
+                        "{} {}:{:02}",
+                        state.player_one.name,
+                        state.player_one.time_remaining / 60_000,
+                        (state.player_one.time_remaining % 60_000) / 1000
+                    ));
+                } else {
+                    top_player = text(format!(
+                        "{} {}:{:02}",
+                        state.player_two.name,
+                        state.player_two.time_remaining / 60_000,
+                        (state.player_two.time_remaining % 60_000) / 1000
+                    ));
+                }
+                grid = grid.push(top_player);
+                grid = grid.push(column((0..state.game.height).map(|y| {
                     row((0..state.game.width).map(|x| {
                         let cell = &state.game.grid[y][x];
                         let mut number = "".to_string();
@@ -430,23 +486,26 @@ impl AppState {
                         .into()
                     }))
                     .into()
-                }));
+                })));
 
-                let mut player_name = text("");
-                if state.role == 1 {
-                    if state.player_one_name.is_empty() {
-                        player_name = text("Player 1").size(12);
-                    } else {
-                        player_name = text(&state.player_one_name).size(12);
-                    }
-                } else if state.role == 2 {
-                    if state.player_two_name.is_empty() {
-                        player_name = text("Player 2").size(12);
-                    } else {
-                        player_name = text(&state.player_two_name).size(12);
-                    }
+                let bottom_player;
+                if state.role == 2 {
+                    bottom_player = text(format!(
+                        "{} {}:{:02}",
+                        state.player_two.name,
+                        state.player_two.time_remaining / 60_000,
+                        (state.player_two.time_remaining % 60_000) / 1000
+                    ));
+                } else {
+                    bottom_player = text(format!(
+                        "{} {}:{:02}",
+                        state.player_one.name,
+                        state.player_one.time_remaining / 60_000,
+                        (state.player_one.time_remaining % 60_000) / 1000
+                    ));
                 }
-                grid = grid.push(player_name);
+
+                grid = grid.push(bottom_player);
 
                 let online_status;
                 let online_status_color;
@@ -471,27 +530,21 @@ impl AppState {
                 ]
                 .spacing(100);
 
-                let mut title = "Minesweeper";
-                if state.game.game_over {
-                    title = "Game Over!";
-                } else if state.game.game_won {
-                    title = "Game Won!";
-                }
-                if state.winner == state.role {
-                    title = "Game Won!";
-                }
+                let title = if state.game.game_over {
+                    if state.winner == state.role {
+                        "Game Won!"
+                    } else {
+                        "Game Over!"
+                    }
+                } else {
+                    "Minesweeper!"
+                };
                 let title = text(title);
-                let timer = text(format!(
-                    "{}:{:02}",
-                    state.game.seconds / 60,
-                    state.game.seconds % 60
-                ));
                 let controls = row![
                     button(text("New Game").size(12).center())
                         .on_press(Message::NewGame)
                         .width(100)
                         .height(20),
-                    timer,
                     button(text("Main Menu").size(12).center())
                         .on_press(Message::MainMenu)
                         .width(100)
@@ -499,7 +552,7 @@ impl AppState {
                 ]
                 .spacing(100);
                 let your_turn;
-                if state.turn == state.role {
+                if !state.game.game_over && !state.game.game_won && state.turn == state.role {
                     your_turn = "Your Turn";
                 } else if state.turn == 0 && !state.game.game_over && !state.game.game_won {
                     your_turn = "Waiting for other player...";
@@ -529,8 +582,20 @@ impl AppState {
                 }
             }
             AppState::Multiplayer(state) => {
-                Subscription::run_with(state.url.clone(), |u| websocket::connect(u.to_string()))
-                    .map(Message::WebsocketEvent)
+                let timer_sub = if state.game.running
+                    && !state.game.game_over
+                    && !state.player_one.first_move
+                    && !state.player_two.first_move
+                {
+                    time::every(seconds(1)).map(|_| Message::Tick)
+                } else {
+                    Subscription::none()
+                };
+                let ws_sub = Subscription::run_with(state.url.clone(), |u| {
+                    websocket::connect(u.to_string())
+                })
+                .map(Message::WebsocketEvent);
+                Subscription::batch([timer_sub, ws_sub])
             }
             _ => Subscription::none(),
         }

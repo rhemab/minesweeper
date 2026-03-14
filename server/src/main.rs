@@ -34,6 +34,21 @@ struct Game {
     tx: broadcast::Sender<shared::WsMsg>,
 }
 
+impl Game {
+    fn broadcast_game_state(&mut self, winner: usize) {
+        let msg = shared::WsMsg::GameState {
+            game: self.minesweeper.clone(),
+            player_one: self.player_one.clone(),
+            player_two: self.player_two.clone(),
+            turn: self.turn,
+            winner,
+        };
+        if let Err(err) = self.tx.send(msg) {
+            error!("Error sending over channel: {}", err);
+        }
+    }
+}
+
 #[tokio::main]
 async fn main() {
     tracing_subscriber::registry()
@@ -46,33 +61,6 @@ async fn main() {
 
     let app_state = AppState::default();
     let app_state = Arc::new(Mutex::new(app_state));
-
-    // separate task to keep time
-    let app_state_clone = app_state.clone();
-    tokio::spawn(async move {
-        let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(1));
-        loop {
-            interval.tick().await;
-            let mut app_state = app_state_clone.lock().await;
-            for game in app_state.games.values_mut() {
-                if game.minesweeper.running
-                    && !game.minesweeper.game_over
-                    && !game.minesweeper.game_won
-                {
-                    game.minesweeper.seconds += 1;
-                    let msg = shared::WsMsg::GameState {
-                        game: game.minesweeper.clone(),
-                        player_one: game.player_one.clone(),
-                        player_two: game.player_two.clone(),
-                        turn: game.turn,
-                    };
-                    if let Err(err) = game.tx.send(msg) {
-                        error!("Error sending over channel: {}", err);
-                    }
-                }
-            }
-        }
-    });
 
     // build our application with some routes
     let app = Router::new()
@@ -123,10 +111,16 @@ async fn handle_socket(socket: WebSocket, who: SocketAddr, app_state: Arc<Mutex<
             let new_game = Game {
                 minesweeper: shared::MinesweeperGame::new(20, 40),
                 player_one: shared::Player {
-                    name: String::new(),
                     connected: true,
+                    time_remaining: 60_000,
+                    first_move: true,
+                    ..shared::Player::default()
                 },
-                player_two: shared::Player::default(),
+                player_two: shared::Player {
+                    time_remaining: 60_000,
+                    first_move: true,
+                    ..shared::Player::default()
+                },
                 turn: 0,
                 tx,
             };
@@ -155,6 +149,7 @@ async fn handle_socket(socket: WebSocket, who: SocketAddr, app_state: Arc<Mutex<
                 player_one: game.player_one.clone(),
                 player_two: game.player_two.clone(),
                 turn: game.turn,
+                winner: 0,
             };
             if let Err(err) = game.tx.send(msg) {
                 error!("Error sending over channel: {}", err);
@@ -169,7 +164,8 @@ async fn handle_socket(socket: WebSocket, who: SocketAddr, app_state: Arc<Mutex<
         while let Ok(msg) = rx.recv().await {
             if let Ok(json_msg) = serde_json::to_string(&msg) {
                 // In case of any websocket error, we exit.
-                if sender.send(Message::Text(json_msg.into())).await.is_err() {
+                if let Err(err) = sender.send(Message::Text(json_msg.into())).await {
+                    error!("error sending over websocket: {}", err);
                     return 1;
                 }
             }
@@ -250,7 +246,25 @@ async fn process_message(
         Message::Text(t) => {
             if let Ok(ws_msg) = serde_json::from_str::<shared::WsMsg>(&t) {
                 match ws_msg {
-                    shared::WsMsg::NewMove { row, col, game_id } => {
+                    shared::WsMsg::PlayerTimeout { game_id } => {
+                        let mut app_state = app_state.lock().await;
+                        if let Some(game) = app_state.games.get_mut(&game_id) {
+                            game.minesweeper.game_over = true;
+                            if role == 1 {
+                                game.player_one.time_remaining = 0;
+                                game.broadcast_game_state(2);
+                            } else {
+                                game.player_two.time_remaining = 0;
+                                game.broadcast_game_state(1);
+                            }
+                        }
+                    }
+                    shared::WsMsg::NewMove {
+                        row,
+                        col,
+                        game_id,
+                        elapsed_ms,
+                    } => {
                         let mut app_state = app_state.lock().await;
                         if let Some(game) = app_state.games.get_mut(&game_id) {
                             if !game.minesweeper.game_won
@@ -266,81 +280,53 @@ async fn process_message(
                                         game.minesweeper.compute_cell_numbers();
                                         game.minesweeper.running = true;
                                     }
-                                    game.minesweeper.flood_fill(row, col);
-                                    // send game state back to clients
-                                    let new_game_state = shared::WsMsg::GameState {
-                                        game: game.minesweeper.clone(),
-                                        player_one: game.player_one.clone(),
-                                        player_two: game.player_two.clone(),
-                                        turn: 0,
-                                    };
-                                    if let Err(err) = game.tx.send(new_game_state) {
-                                        error!("Error sending over channel: {}", err);
-                                    }
-                                    if game.minesweeper.game_over {
-                                        let game_over = shared::WsMsg::GameOver { winner: 2 };
-                                        if let Err(err) = game.tx.send(game_over) {
-                                            error!("Error sending over channel: {}", err);
+                                    if !game.player_one.first_move {
+                                        // subtract elapsed time from player time
+                                        game.player_one.time_remaining -= elapsed_ms;
+                                        // check if timeout
+                                        if game.player_one.time_remaining == 0 {
+                                            game.minesweeper.game_over = true;
+                                            game.broadcast_game_state(2);
+                                            return ControlFlow::Continue(());
                                         }
+                                    }
+                                    game.minesweeper.flood_fill(row, col);
+                                    game.player_one.first_move = false;
+                                    if game.minesweeper.game_over {
+                                        game.broadcast_game_state(2);
                                         return ControlFlow::Continue(());
                                     }
                                     game.minesweeper.check_game_won();
                                     if game.minesweeper.game_won {
-                                        let game_over = shared::WsMsg::GameOver { winner: 1 };
-                                        if let Err(err) = game.tx.send(game_over) {
-                                            error!("Error sending over channel: {}", err);
-                                        }
+                                        game.broadcast_game_state(1);
                                         return ControlFlow::Continue(());
                                     }
                                     game.turn += 1;
-                                    // send game state back to clients
-                                    let new_game_state = shared::WsMsg::GameState {
-                                        game: game.minesweeper.clone(),
-                                        player_one: game.player_one.clone(),
-                                        player_two: game.player_two.clone(),
-                                        turn: game.turn,
-                                    };
-                                    if let Err(err) = game.tx.send(new_game_state) {
-                                        error!("Error sending over channel: {}", err);
-                                    }
+                                    game.broadcast_game_state(0);
                                 } else if game.turn == 2 && role == 2 {
-                                    game.minesweeper.flood_fill(row, col);
-                                    // send game state back to clients
-                                    let new_game_state = shared::WsMsg::GameState {
-                                        game: game.minesweeper.clone(),
-                                        player_one: game.player_one.clone(),
-                                        player_two: game.player_two.clone(),
-                                        turn: 0,
-                                    };
-                                    if let Err(err) = game.tx.send(new_game_state) {
-                                        error!("Error sending over channel: {}", err);
-                                    }
-                                    if game.minesweeper.game_over {
-                                        let game_over = shared::WsMsg::GameOver { winner: 1 };
-                                        if let Err(err) = game.tx.send(game_over) {
-                                            error!("Error sending over channel: {}", err);
+                                    if !game.player_two.first_move {
+                                        // subtract elapsed time from player time
+                                        game.player_two.time_remaining -= elapsed_ms;
+                                        // check if timeout
+                                        if game.player_two.time_remaining == 0 {
+                                            game.minesweeper.game_over = true;
+                                            game.broadcast_game_state(1);
+                                            return ControlFlow::Continue(());
                                         }
+                                    }
+                                    game.minesweeper.flood_fill(row, col);
+                                    game.player_two.first_move = false;
+                                    if game.minesweeper.game_over {
+                                        game.broadcast_game_state(1);
                                         return ControlFlow::Continue(());
                                     }
                                     game.minesweeper.check_game_won();
                                     if game.minesweeper.game_won {
-                                        let game_over = shared::WsMsg::GameOver { winner: 2 };
-                                        if let Err(err) = game.tx.send(game_over) {
-                                            error!("Error sending over channel: {}", err);
-                                        }
+                                        game.broadcast_game_state(2);
                                         return ControlFlow::Continue(());
                                     }
                                     game.turn -= 1;
-                                    // send game state back to clients
-                                    let new_game_state = shared::WsMsg::GameState {
-                                        game: game.minesweeper.clone(),
-                                        player_one: game.player_one.clone(),
-                                        player_two: game.player_two.clone(),
-                                        turn: game.turn,
-                                    };
-                                    if let Err(err) = game.tx.send(new_game_state) {
-                                        error!("Error sending over channel: {}", err);
-                                    }
+                                    game.broadcast_game_state(0);
                                 }
                             }
                             return ControlFlow::Continue(());
