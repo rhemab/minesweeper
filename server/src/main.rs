@@ -20,6 +20,8 @@ use tokio::sync::{Mutex, broadcast};
 use tracing::{error, info};
 use uuid::Uuid;
 
+const DEFAULT_TIME: u128 = 120_000;
+
 #[derive(Default)]
 struct AppState {
     games: HashMap<String, Game>,
@@ -112,12 +114,12 @@ async fn handle_socket(socket: WebSocket, who: SocketAddr, app_state: Arc<Mutex<
                 minesweeper: shared::MinesweeperGame::new(20, 40),
                 player_one: shared::Player {
                     connected: true,
-                    time_remaining: 60_000,
+                    time_remaining: DEFAULT_TIME,
                     first_move: true,
                     ..shared::Player::default()
                 },
                 player_two: shared::Player {
-                    time_remaining: 60_000,
+                    time_remaining: DEFAULT_TIME,
                     first_move: true,
                     ..shared::Player::default()
                 },
