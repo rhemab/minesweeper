@@ -277,6 +277,10 @@ impl AppState {
                     if state.game.grid[row][col].is_revealed {
                         return Task::none();
                     }
+                    // run flood fill before sending to server for instant feedback
+                    if !state.player_one.first_move {
+                        state.game.flood_fill(row, col);
+                    }
                     // send move to server
                     match &mut state.connection {
                         WebsocketState::Connected(conn) => {

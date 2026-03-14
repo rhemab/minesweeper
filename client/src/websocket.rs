@@ -11,7 +11,6 @@ pub fn connect(url: String) -> impl Sipper<(), Event> {
     sipper(async |mut output| {
         let (mut websocket, mut input) = match async_tungstenite::tokio::connect_async(url).await {
             Ok((websocket, _)) => {
-                dbg!("websocket connected!");
                 let (sender, receiver) = mpsc::channel(100);
 
                 output.send(Event::Connected(Connection(sender))).await;
