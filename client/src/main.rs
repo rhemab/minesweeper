@@ -16,7 +16,6 @@ mod websocket;
 
 const BLUE: Color = Color::from_rgb(0.0, 0.0, 1.0);
 const GREEN: Color = Color::from_rgb(0.0, 0.5, 0.0);
-const NEON_GREEN: Color = Color::from_rgb(0.0, 1.0, 0.5);
 const BRIGHT_GREEN: Color = Color::from_rgb(0.0, 1.0, 0.0);
 const RED: Color = Color::from_rgb(1.0, 0.0, 0.0);
 const DARK_BLUE: Color = Color::from_rgb(0.0, 0.0, 0.5);
@@ -414,8 +413,30 @@ impl AppState {
                 ]
                 .spacing(100);
 
+                // wrap grid in a container
+                let game_grid = container(grid).padding(3).style(|_| {
+                    let mut color = LIGHT_BLUE;
+                    let mut width = 0.0;
+                    if game.game_won {
+                        color = BRIGHT_GREEN;
+                        width = 3.0;
+                    } else if game.game_over {
+                        color = RED;
+                        width = 3.0;
+                    }
+
+                    container::Style {
+                        border: Border {
+                            color,
+                            width,
+                            ..Default::default()
+                        },
+                        ..Default::default()
+                    }
+                });
+
                 center(
-                    column![title, controls, grid, stats]
+                    column![title, controls, game_grid, stats]
                         .spacing(10)
                         .width(Length::Fill)
                         .align_x(Center),
@@ -430,8 +451,7 @@ impl AppState {
                     }
                     _ => {}
                 }
-                let mut grid = column![];
-                grid = grid.push(column((0..state.game.height).map(|y| {
+                let grid = column((0..state.game.height).map(|y| {
                     row((0..state.game.width).map(|x| {
                         let cell = &state.game.grid[y][x];
                         let mut number = "".to_string();
@@ -476,7 +496,7 @@ impl AppState {
                         .into()
                     }))
                     .into()
-                })));
+                }));
 
                 let top_player;
                 if state.role == 2 {
