@@ -1,8 +1,8 @@
 #![windows_subsystem = "windows"]
 
 use iced::time::{self, seconds};
-use iced::widget::{button, center, column, mouse_area, row, text};
-use iced::{Center, Color, Element, Length, Subscription, Task, Theme};
+use iced::widget::{button, center, column, container, mouse_area, row, text};
+use iced::{Border, Center, Color, Element, Length, Subscription, Task, Theme};
 
 use std::collections::HashSet;
 
@@ -16,8 +16,11 @@ mod websocket;
 
 const BLUE: Color = Color::from_rgb(0.0, 0.0, 1.0);
 const GREEN: Color = Color::from_rgb(0.0, 0.5, 0.0);
+const NEON_GREEN: Color = Color::from_rgb(0.0, 1.0, 0.5);
+const BRIGHT_GREEN: Color = Color::from_rgb(0.0, 1.0, 0.0);
 const RED: Color = Color::from_rgb(1.0, 0.0, 0.0);
 const DARK_BLUE: Color = Color::from_rgb(0.0, 0.0, 0.5);
+const LIGHT_BLUE: Color = Color::from_rgb(0.0, 0.7, 1.0);
 const DARK_RED: Color = Color::from_rgb(0.5, 0.0, 0.0);
 const TEAL: Color = Color::from_rgb(0.0, 0.5, 0.5);
 const BLACK: Color = Color::BLACK;
@@ -428,23 +431,6 @@ impl AppState {
                     _ => {}
                 }
                 let mut grid = column![];
-                let top_player;
-                if state.role == 2 {
-                    top_player = text(format!(
-                        "{} {}:{:02}",
-                        state.player_one.name,
-                        state.player_one.time_remaining / 60_000,
-                        (state.player_one.time_remaining % 60_000) / 1000
-                    ));
-                } else {
-                    top_player = text(format!(
-                        "{} {}:{:02}",
-                        state.player_two.name,
-                        state.player_two.time_remaining / 60_000,
-                        (state.player_two.time_remaining % 60_000) / 1000
-                    ));
-                }
-                grid = grid.push(top_player);
                 grid = grid.push(column((0..state.game.height).map(|y| {
                     row((0..state.game.width).map(|x| {
                         let cell = &state.game.grid[y][x];
@@ -492,6 +478,22 @@ impl AppState {
                     .into()
                 })));
 
+                let top_player;
+                if state.role == 2 {
+                    top_player = text(format!(
+                        "{} {}:{:02}",
+                        state.player_one.name,
+                        state.player_one.time_remaining / 60_000,
+                        (state.player_one.time_remaining % 60_000) / 1000
+                    ));
+                } else {
+                    top_player = text(format!(
+                        "{} {}:{:02}",
+                        state.player_two.name,
+                        state.player_two.time_remaining / 60_000,
+                        (state.player_two.time_remaining % 60_000) / 1000
+                    ));
+                }
                 let bottom_player;
                 if state.role == 2 {
                     bottom_player = text(format!(
@@ -508,8 +510,6 @@ impl AppState {
                         (state.player_one.time_remaining % 60_000) / 1000
                     ));
                 }
-
-                grid = grid.push(bottom_player);
 
                 let online_status;
                 let online_status_color;
@@ -563,12 +563,43 @@ impl AppState {
                 } else {
                     your_turn = "";
                 }
+                let your_turn = text(your_turn);
 
+                // wrap grid in a container
+                let game_grid = container(grid).padding(3).style(|_| {
+                    let mut color = LIGHT_BLUE;
+                    let mut width = 3.0;
+                    if state.role != state.turn {
+                        width = 0.0;
+                    }
+                    if state.winner == state.role {
+                        color = BRIGHT_GREEN;
+                        width = 3.0;
+                    } else if state.game.game_over {
+                        color = RED;
+                        width = 3.0;
+                    }
+
+                    container::Style {
+                        border: Border {
+                            color,
+                            width,
+                            ..Default::default()
+                        },
+                        ..Default::default()
+                    }
+                });
                 center(
-                    column![title, controls, grid, online_status, your_turn]
-                        .spacing(10)
-                        .width(Length::Fill)
-                        .align_x(Center),
+                    column![
+                        title,
+                        controls,
+                        column![top_player, game_grid, bottom_player],
+                        online_status,
+                        your_turn
+                    ]
+                    .spacing(10)
+                    .width(Length::Fill)
+                    .align_x(Center),
                 )
                 .into()
             }
